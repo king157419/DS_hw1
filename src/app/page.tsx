@@ -2,6 +2,9 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { formatTime } from '@/lib/bank-simulation';
+import dynamic from 'next/dynamic';
+
+const P5QueueVisualization = dynamic(() => import('@/components/P5QueueVisualization'), { ssr: false });
 
 // 类型定义
 interface Customer {
@@ -748,7 +751,7 @@ export default function BankSimulationPage() {
               <h2 className="text-2xl font-bold text-gray-800 mb-4 flex items-center gap-2">
                 <span className="text-2xl">🎬</span> 窗口动态演示
               </h2>
-              <DynamicQueueVisualization
+              <P5QueueVisualization
                 simulationResult={result}
                 isPlaying={resultIsPlaying}
                 speed={resultSpeed}
@@ -839,7 +842,7 @@ export default function BankSimulationPage() {
 
             {/* 可视化区域 */}
             {result ? (
-              <DynamicQueueVisualization
+              <P5QueueVisualization
                 simulationResult={result}
                 isPlaying={resultIsPlaying}
                 speed={resultSpeed}
