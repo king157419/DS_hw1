@@ -5,6 +5,7 @@ import { formatTime } from '@/lib/bank-simulation';
 import dynamic from 'next/dynamic';
 
 const P5QueueVisualization = dynamic(() => import('@/components/P5QueueVisualization'), { ssr: false });
+const AlgorithmicArt = dynamic(() => import('@/components/AlgorithmicArt'), { ssr: false });
 
 // 类型定义
 interface Customer {
@@ -842,15 +843,41 @@ export default function BankSimulationPage() {
 
             {/* 可视化区域 */}
             {result ? (
-              <P5QueueVisualization
-                simulationResult={result}
-                isPlaying={resultIsPlaying}
-                speed={resultSpeed}
-                currentTime={resultCurrentTime}
-                onPlayPause={() => setResultIsPlaying(!resultIsPlaying)}
-                onSpeedChange={setResultSpeed}
-                onTimeChange={setResultCurrentTime}
-              />
+              <div className="space-y-10">
+                <P5QueueVisualization
+                  simulationResult={result}
+                  isPlaying={resultIsPlaying}
+                  speed={resultSpeed}
+                  currentTime={resultCurrentTime}
+                  onPlayPause={() => setResultIsPlaying(!resultIsPlaying)}
+                  onSpeedChange={setResultSpeed}
+                  onTimeChange={setResultCurrentTime}
+                />
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-700 mb-4">算法艺术可视化</h3>
+                  <AlgorithmicArt
+                    statistics={{
+                      totalCustomers: result.statistics.totalCustomers,
+                      avgWaitTime: result.statistics.avgWaitTime,
+                      totalSimulationTime: result.statistics.totalSimulationTime,
+                    }}
+                    windows={result.windows.map(w => ({
+                      id: w.id,
+                      totalServed: w.totalServed,
+                      totalServiceTime: w.totalServiceTime,
+                      idleTime: w.idleTime,
+                    }))}
+                    customers={result.customers.map(c => ({
+                      id: c.id,
+                      arrivalTime: c.arrivalTime,
+                      waitTime: c.waitTime,
+                      serviceTime: c.serviceTime,
+                      windowId: c.windowId,
+                      endTime: c.endTime,
+                    }))}
+                  />
+                </div>
+              </div>
             ) : (
               <div className="text-center py-16 text-gray-400">
                 <div className="text-6xl mb-4">🎬</div>
