@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 
 interface SimStats {
   totalCustomers: number;
@@ -31,19 +31,15 @@ export interface AlgorithmicArtProps {
 }
 
 const WIN_COUNT = 4;
-const PALETTE = [
-  [217, 119, 87],   // anthropic orange
-  [106, 155, 204],  // anthropic blue
-  [120, 140, 93],   // anthropic green
-  [176, 174, 165],  // anthropic gray
+const PALETTE: [number, number, number][] = [
+  [217, 119, 87],
+  [106, 155, 204],
+  [120, 140, 93],
+  [176, 174, 165],
 ];
 
 export default function AlgorithmicArt({ statistics, windows, customers }: AlgorithmicArtProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [seed, setSeed] = useState(() => Math.round(statistics.avgWaitTime * 1000) % 99999 || 12345);
-  const seedRef = useRef(seed);
-
-  useEffect(() => { seedRef.current = seed; }, [seed]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -53,197 +49,241 @@ export default function AlgorithmicArt({ statistics, windows, customers }: Algor
     import('p5').then((mod) => {
       const p5 = mod.default;
       const container = containerRef.current!;
-      const W = 800;
-      const H = 800;
+      const W = 900;
+      const H = 580;
+      const WIN_W = 120;
+      const WIN_H = 80;
+      const SPACING = (W - WIN_COUNT * WIN_W) / (WIN_COUNT + 1);
+      const WIN_Y = 290;
+      const TITLE_H = 50;
 
-      // ── seeded PRNG (mulberry32) ──
-      function makePRNG(s: number) {
-        let state = s;
-        return function () {
-          state |= 0; state = state + 0x6D2B79F5 | 0;
-          let t = Math.imul(state ^ state >>> 15, 1 | state);
-          t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
-          return ((t ^ t >>> 14) >>> 0) / 4294967296;
-        };
+      const winCX = (i: number) => SPACING + i * (WIN_W + SPACING) + WIN_W / 2;
+      const winCY = WIN_Y + WIN_H / 2;
+
+      const utilization = windows.slice(0, WIN_COUNT).map(w =>
+        Math.min(1, w.totalServiceTime / Math.max(1, statistics.totalSimulationTime))
+      );
+
+      const byWindow: CustomerData[][] = Array.from({ length: WIN_COUNT }, () => []);
+      customers.forEach(c => {
+        const wi = Math.max(0, Math.min(WIN_COUNT - 1, c.windowId - 1));
+        byWindow[wi].push(c);
+      });
+
+      function waitColor(waitTime: number): [number, number, number] {
+        const t = Math.min(1, waitTime / 10);
+        return [
+          Math.round(100 + t * 120),
+          Math.round(149 - t * 109),
+          Math.round(237 - t * 177),
+        ];
       }
-
-      // ── Perlin-like noise (seeded) ──
-      function makeNoise2D(rng: () => number) {
-        const perm = Array.from({ length: 512 }, (_, i) => i % 256);
-        for (let i = 255; i > 0; i--) {
-          const j = Math.floor(rng() * (i + 1));
-          [perm[i], perm[j]] = [perm[j], perm[i]];
-          perm[i + 256] = perm[i];
-        }
-        const grad = (h: number, x: number, y: number) => {
-          const v = h & 3;
-          return (v < 2 ? (v === 0 ? x : -x) : 0) + (v < 2 ? 0 : (v === 2 ? y : -y));
-        };
-        return function (x: number, y: number) {
-          const X = Math.floor(x) & 255, Y = Math.floor(y) & 255;
-          x -= Math.floor(x); y -= Math.floor(y);
-          const u = x * x * x * (x * (x * 6 - 15) + 10);
-          const v2 = y * y * y * (y * (y * 6 - 15) + 10);
-          const a = perm[X] + Y, b = perm[X + 1] + Y;
-          return 0.5 + 0.5 * (
-            (1 - u) * ((1 - v2) * grad(perm[a], x, y) + v2 * grad(perm[a + 1], x, y - 1)) +
-            u * ((1 - v2) * grad(perm[b], x - 1, y) + v2 * grad(perm[b + 1], x - 1, y - 1))
-          );
-        };
-      }
-
-      // ── build window centers ──
-      const winCenters = Array.from({ length: WIN_COUNT }, (_, i) => ({
-        x: (W / (WIN_COUNT + 1)) * (i + 1),
-        y: H * 0.72,
-        col: PALETTE[i % PALETTE.length],
-        utilization: windows[i]
-          ? Math.min(1, windows[i].totalServiceTime / Math.max(1, statistics.totalSimulationTime))
-          : 0.5,
-      }));
-
-      // ── build particles from customer data ──
-      const rng = makePRNG(seedRef.current);
-      const noise = makeNoise2D(makePRNG(seedRef.current + 1));
 
       interface Particle {
         x: number; y: number;
-        ox: number; oy: number; // origin (entry point)
-        tx: number; ty: number; // target window center
-        col: [number, number, number];
+        vx: number; vy: number;
         alpha: number;
-        speed: number;
-        orbit: number;   // orbit radius (maps to waitTime)
-        orbitAngle: number;
-        phase: number;   // animation phase: 'orbit' | 'arrive' | 'done'
-        phaseProgress: number;
-        trailX: number[]; trailY: number[];
+        r: number;
+        col: [number, number, number];
+        delay: number;
       }
-
-      const particles: Particle[] = customers.slice(0, 120).map((c) => {
+      const particles: Particle[] = [];
+      customers.forEach((c, idx) => {
         const wi = Math.max(0, Math.min(WIN_COUNT - 1, c.windowId - 1));
-        const wc = winCenters[wi];
-        const orbitRadius = 18 + Math.min(c.waitTime, 20) * 4; // 18–98px
-        return {
-          x: wc.x + (rng() - 0.5) * 60,
-          y: H * 0.05 + rng() * H * 0.15,
-          ox: wc.x + (rng() - 0.5) * 60,
-          oy: H * 0.05 + rng() * H * 0.15,
-          tx: wc.x, ty: wc.y,
-          col: wc.col as [number, number, number],
-          alpha: 0.7 + rng() * 0.3,
-          speed: 0.004 + rng() * 0.003,
-          orbit: orbitRadius,
-          orbitAngle: rng() * Math.PI * 2,
-          phase: 0,       // 0=travel, 1=orbit, 2=arrive, 3=burst
-          phaseProgress: rng(), // stagger start
-          trailX: [], trailY: [],
-        };
+        const cx = winCX(wi);
+        const col = PALETTE[wi];
+        const r = 3 + Math.min(c.serviceTime, 10) * 0.4;
+        for (let k = 0; k < 4; k++) {
+          const angle = (k / 4) * Math.PI * 2 + Math.random() * 0.5;
+          const spd = 1.2 + Math.random() * 2;
+          particles.push({
+            x: cx + (Math.random() - 0.5) * 20,
+            y: winCY,
+            vx: Math.cos(angle) * spd,
+            vy: Math.sin(angle) * spd - 1.2,
+            alpha: 0.85,
+            r,
+            col,
+            delay: Math.floor(idx * 1.2) % 180,
+          });
+        }
       });
+
+      const maxServed = Math.max(1, ...windows.slice(0, WIN_COUNT).map(w => w.totalServed));
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const sketch = (p: any) => {
         p.setup = () => {
           p.createCanvas(W, H);
           p.frameRate(60);
-          p.colorMode(p.RGB, 255, 255, 255, 255);
+          p.textFont('sans-serif');
         };
 
         p.draw = () => {
-          // fading background for trails
-          p.fill(20, 20, 19, 18);
-          p.noStroke();
-          p.rect(0, 0, W, H);
+          p.background(248, 250, 252);
 
-          // ── flow field background lines ──
-          if (p.frameCount % 3 === 0) {
-            const fx = rng() * W;
-            const fy = rng() * H;
-            const angle = noise(fx * 0.004, fy * 0.004) * Math.PI * 4;
-            const len = 18 + rng() * 20;
-            p.stroke(176, 174, 165, 18);
-            p.strokeWeight(0.5);
-            p.line(fx, fy, fx + Math.cos(angle) * len, fy + Math.sin(angle) * len);
+          // ── title bar ──
+          p.noStroke();
+          p.fill(30, 41, 59);
+          p.rect(0, 0, W, TITLE_H);
+          p.fill(255);
+          p.textSize(15); p.textAlign(p.LEFT, p.CENTER);
+          p.text('🏦 银行排队模拟 · 4窗口', 20, TITLE_H / 2);
+          p.textAlign(p.RIGHT, p.CENTER);
+          p.textSize(13);
+          p.fill(156, 163, 175);
+          p.text(`平均等待: ${statistics.avgWaitTime.toFixed(1)} min  |  总客户: ${statistics.totalCustomers}  |  仿真时长: ${statistics.totalSimulationTime.toFixed(1)} min`, W - 16, TITLE_H / 2);
+
+          // ── particle animation ──
+          for (let i = particles.length - 1; i >= 0; i--) {
+            const pt = particles[i];
+            if (pt.delay > 0) { pt.delay--; continue; }
+            p.noStroke();
+            p.fill(pt.col[0], pt.col[1], pt.col[2], pt.alpha * 255);
+            p.circle(pt.x, pt.y, pt.r * 2);
+            pt.x += pt.vx; pt.y += pt.vy;
+            pt.vy += 0.04;
+            pt.alpha -= 0.008;
+            if (pt.alpha <= 0) {
+              // reset particle
+              const wi = Math.floor(Math.random() * WIN_COUNT);
+              const angle = Math.random() * Math.PI * 2;
+              const spd = 1.2 + Math.random() * 2;
+              pt.x = winCX(wi) + (Math.random() - 0.5) * 20;
+              pt.y = winCY;
+              pt.vx = Math.cos(angle) * spd;
+              pt.vy = Math.sin(angle) * spd - 1.2;
+              pt.alpha = 0.85;
+              pt.col = PALETTE[wi];
+            }
           }
 
-          // ── window halos ──
-          winCenters.forEach((wc) => {
-            const pulseR = 30 + wc.utilization * 60;
-            const pulse = 0.4 + 0.3 * Math.sin(p.frameCount * 0.04);
+          // ── windows ──
+          for (let wi = 0; wi < WIN_COUNT; wi++) {
+            const cx = winCX(wi);
+            const wx = cx - WIN_W / 2;
+            const col = PALETTE[wi];
+            const util = utilization[wi] ?? 0;
+            const glow = util * 30;
+
+            // glow halo
+            if (glow > 2) {
+              p.noStroke();
+              p.fill(col[0], col[1], col[2], glow);
+              p.rect(wx - 10, WIN_Y - 10, WIN_W + 20, WIN_H + 20, 18);
+            }
+
+            // window box gradient via drawingContext
+            p.drawingContext.save();
+            const grad = (p.drawingContext as unknown as CanvasRenderingContext2D).createLinearGradient(wx, WIN_Y, wx, WIN_Y + WIN_H);
+            grad.addColorStop(0, `rgba(${col[0]},${col[1]},${col[2]},1)`);
+            grad.addColorStop(1, `rgba(${Math.max(0,col[0]-40)},${Math.max(0,col[1]-40)},${Math.max(0,col[2]-40)},1)`);
+            (p.drawingContext as unknown as CanvasRenderingContext2D).fillStyle = grad;
             p.noStroke();
-            p.fill(wc.col[0], wc.col[1], wc.col[2], pulse * 60);
-            p.circle(wc.x, wc.y, pulseR * 2);
-            // inner
-            p.fill(wc.col[0], wc.col[1], wc.col[2], 180);
-            p.circle(wc.x, wc.y, 24);
-            // label
-            p.fill(250, 249, 245, 200);
-            p.noStroke();
-            p.textAlign(p.CENTER, p.CENTER);
+            p.rect(wx, WIN_Y, WIN_W, WIN_H, 12);
+            p.drawingContext.restore();
+
+            // window label
+            p.fill(255); p.noStroke();
+            p.textSize(13); p.textAlign(p.CENTER, p.CENTER);
+            p.text(`窗口 ${wi + 1}`, cx, WIN_Y + 26);
             p.textSize(11);
-            p.text(`窗口${wc.col === PALETTE[0] ? 1 : wc.col === PALETTE[1] ? 2 : wc.col === PALETTE[2] ? 3 : 4}`, wc.x, wc.y);
-          });
+            p.fill(255, 255, 255, 200);
+            p.text(`已服务 ${windows[wi]?.totalServed ?? 0} 人`, cx, WIN_Y + 50);
 
-          // ── particles ──
-          particles.forEach((pt) => {
-            pt.phaseProgress += pt.speed;
-
-            if (pt.phase === 0) {
-              // travel toward window center
-              const dx = pt.tx - pt.x;
-              const dy = pt.ty - pt.y;
-              const dist = Math.sqrt(dx * dx + dy * dy);
-              if (dist < pt.orbit + 10) {
-                pt.phase = 1;
-                pt.phaseProgress = 0;
-                pt.orbitAngle = Math.atan2(pt.y - pt.ty, pt.x - pt.tx);
-              } else {
-                pt.x += dx * 0.012;
-                pt.y += dy * 0.012;
-              }
-            } else if (pt.phase === 1) {
-              // orbit around window
-              pt.orbitAngle += 0.018 + pt.speed * 0.5;
-              pt.x = pt.tx + Math.cos(pt.orbitAngle) * pt.orbit;
-              pt.y = pt.ty + Math.sin(pt.orbitAngle) * pt.orbit;
-              if (pt.phaseProgress > 1.5) { pt.phase = 2; pt.phaseProgress = 0; }
-            } else if (pt.phase === 2) {
-              // spiral inward to window center
-              pt.orbitAngle += 0.04;
-              const r = pt.orbit * (1 - pt.phaseProgress * 0.6);
-              pt.x = pt.tx + Math.cos(pt.orbitAngle) * Math.max(r, 2);
-              pt.y = pt.ty + Math.sin(pt.orbitAngle) * Math.max(r, 2);
-              if (pt.phaseProgress > 1.2) { pt.phase = 3; pt.phaseProgress = 0; }
-            } else {
-              // burst outward then reset
-              pt.orbitAngle += 0.08;
-              const br = pt.orbit * pt.phaseProgress * 0.5;
-              pt.x = pt.tx + Math.cos(pt.orbitAngle) * br;
-              pt.y = pt.ty + Math.sin(pt.orbitAngle) * br;
-              if (pt.phaseProgress > 1.0) {
-                pt.x = pt.ox; pt.y = pt.oy;
-                pt.phase = 0; pt.phaseProgress = 0;
-                pt.trailX = []; pt.trailY = [];
-              }
-            }
-
-            // trail
-            pt.trailX.push(pt.x); pt.trailY.push(pt.y);
-            if (pt.trailX.length > 12) { pt.trailX.shift(); pt.trailY.shift(); }
-            for (let ti = 0; ti < pt.trailX.length - 1; ti++) {
-              const a = (ti / pt.trailX.length) * pt.alpha * 120;
-              p.stroke(pt.col[0], pt.col[1], pt.col[2], a);
-              p.strokeWeight(1);
-              p.line(pt.trailX[ti], pt.trailY[ti], pt.trailX[ti + 1], pt.trailY[ti + 1]);
-            }
-
-            // dot
+            // utilization bar inside window
+            p.fill(0, 0, 0, 40);
             p.noStroke();
-            const dotA = pt.phase === 3 ? (1 - pt.phaseProgress) * pt.alpha * 255 : pt.alpha * 220;
-            p.fill(pt.col[0], pt.col[1], pt.col[2], dotA);
-            const dotR = pt.phase === 3 ? 6 * (1 - pt.phaseProgress * 0.7) : (pt.phase === 1 ? 5 : 4);
-            p.circle(pt.x, pt.y, dotR * 2);
-          });
+            p.rect(wx + 10, WIN_Y + 62, WIN_W - 20, 8, 4);
+            p.fill(255, 255, 255, 180);
+            p.rect(wx + 10, WIN_Y + 62, (WIN_W - 20) * util, 8, 4);
+          }
+
+          // ── queue dots above each window ──
+          for (let wi = 0; wi < WIN_COUNT; wi++) {
+            const cx = winCX(wi);
+            const queue = byWindow[wi] ?? [];
+            const visible = queue.slice(0, 15);
+            visible.forEach((c, qi) => {
+              const dotY = WIN_Y - 20 - qi * 22;
+              const [r, g, b] = waitColor(c.waitTime);
+              const pulse = 0.85 + 0.15 * Math.sin(p.frameCount * 0.08 + qi * 0.6);
+              p.noStroke();
+              p.fill(r, g, b, pulse * 220);
+              p.circle(cx, dotY, 16);
+              // highlight
+              p.fill(255, 255, 255, 60);
+              p.circle(cx - 3, dotY - 3, 5);
+              // id label
+              p.fill(255);
+              p.textSize(8); p.textAlign(p.CENTER, p.CENTER);
+              p.text(`${c.id}`, cx, dotY);
+            });
+            if (queue.length > 15) {
+              const dotY = WIN_Y - 20 - 15 * 22;
+              p.fill(100, 116, 139); p.textSize(10); p.textAlign(p.CENTER, p.CENTER);
+              p.text(`+${queue.length - 15}`, cx, dotY);
+            }
+            // queue count label
+            p.fill(71, 85, 105); p.textSize(10); p.textAlign(p.CENTER, p.TOP);
+            p.text(`${queue.length}人排队`, cx, WIN_Y + WIN_H + 8);
+          }
+
+          // ── bar chart ──
+          const CHART_Y = WIN_Y + WIN_H + 60;
+          const CHART_H = H - CHART_Y - 40;
+          const BAR_W = 60;
+          const BAR_SPACING = (W - WIN_COUNT * BAR_W) / (WIN_COUNT + 1);
+
+          // axis
+          p.stroke(203, 213, 225); p.strokeWeight(1);
+          p.line(30, CHART_Y, 30, CHART_Y + CHART_H);
+          p.line(30, CHART_Y + CHART_H, W - 20, CHART_Y + CHART_H);
+
+          p.fill(100, 116, 139); p.noStroke();
+          p.textSize(10); p.textAlign(p.CENTER, p.TOP);
+          p.text('各窗口服务人数', W / 2, CHART_Y - 18);
+
+          for (let wi = 0; wi < WIN_COUNT; wi++) {
+            const served = windows[wi]?.totalServed ?? 0;
+            const barH = CHART_H * (served / maxServed);
+            const bx = BAR_SPACING + wi * (BAR_W + BAR_SPACING);
+            const by = CHART_Y + CHART_H - barH;
+            const col = PALETTE[wi];
+
+            p.drawingContext.save();
+            const bg = (p.drawingContext as unknown as CanvasRenderingContext2D).createLinearGradient(bx, by, bx, CHART_Y + CHART_H);
+            bg.addColorStop(0, `rgba(${col[0]},${col[1]},${col[2]},0.9)`);
+            bg.addColorStop(1, `rgba(${col[0]},${col[1]},${col[2]},0.4)`);
+            (p.drawingContext as unknown as CanvasRenderingContext2D).fillStyle = bg;
+            p.noStroke();
+            p.rect(bx, by, BAR_W, barH, 6, 6, 0, 0);
+            p.drawingContext.restore();
+
+            // value label on top
+            p.fill(30, 41, 59); p.noStroke();
+            p.textSize(11); p.textAlign(p.CENTER, p.BOTTOM);
+            p.text(`${served}`, bx + BAR_W / 2, by - 3);
+
+            // x label
+            p.fill(71, 85, 105); p.textSize(10); p.textAlign(p.CENTER, p.TOP);
+            p.text(`窗口${wi + 1}`, bx + BAR_W / 2, CHART_Y + CHART_H + 5);
+          }
+
+          // legend: wait-time color scale
+          const LX = W - 140;
+          const LY = CHART_Y;
+          p.textSize(9); p.textAlign(p.LEFT, p.CENTER); p.fill(100, 116, 139); p.noStroke();
+          p.text('等待时长', LX, LY - 10);
+          for (let k = 0; k < 10; k++) {
+            const [r, g, b] = waitColor(k * 1.1);
+            p.fill(r, g, b); p.noStroke();
+            p.rect(LX + k * 12, LY, 12, 10);
+          }
+          p.fill(100, 116, 139); p.textAlign(p.LEFT, p.TOP);
+          p.text('0 min', LX, LY + 13);
+          p.textAlign(p.RIGHT, p.TOP);
+          p.text('10+ min', LX + 120, LY + 13);
         }; // end draw
       }; // end sketch
 
@@ -252,56 +292,37 @@ export default function AlgorithmicArt({ statistics, windows, customers }: Algor
 
     return () => { p5Instance?.remove(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [seed, statistics, windows, customers]);
+  }, [statistics, windows, customers]);
 
-  const resetSeed = () => setSeed(Math.floor(Math.random() * 99999) + 1);
-  const prevSeed = () => setSeed(s => Math.max(1, s - 1));
-  const nextSeed = () => setSeed(s => Math.min(99999, s + 1));
+  const utilization = windows.slice(0, WIN_COUNT).map(w =>
+    Math.min(1, w.totalServiceTime / Math.max(1, statistics.totalSimulationTime))
+  );
 
   return (
-    <div style={{ display: 'flex', gap: 0, background: '#141413', borderRadius: 16, overflow: 'hidden', minHeight: 820 }}>
-      {/* Anthropic-brand sidebar */}
+    <div style={{ display: 'flex', gap: 0, background: '#141413', borderRadius: 16, overflow: 'hidden' }}>
+      {/* sidebar */}
       <div style={{
-        width: 240, background: '#1c1c1b', padding: '24px 16px', display: 'flex',
-        flexDirection: 'column', gap: 20, flexShrink: 0,
+        width: 220, background: '#1c1c1b', padding: '24px 16px',
+        display: 'flex', flexDirection: 'column', gap: 18, flexShrink: 0,
       }}>
-        <div style={{ color: '#d97757', fontWeight: 700, fontSize: 15, letterSpacing: 1 }}>算法艺术</div>
-        <div style={{ color: '#b0aea5', fontSize: 12, lineHeight: 1.6 }}>
-          粒子根据排队等待时间映射轨道半径，流场由 Perlin 噪声驱动。
-        </div>
-
-        {/* seed nav */}
-        <div>
-          <div style={{ color: '#b0aea5', fontSize: 11, marginBottom: 8 }}>种子 Seed</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <button onClick={prevSeed} style={btnStyle}>‹</button>
-            <span style={{ color: '#faf9f5', fontFamily: 'monospace', fontSize: 13, flex: 1, textAlign: 'center' }}>{seed}</span>
-            <button onClick={nextSeed} style={btnStyle}>›</button>
-          </div>
-          <button onClick={resetSeed} style={{ ...btnStyle, width: '100%', marginTop: 8 }}>随机种子</button>
-        </div>
-
-        {/* stats */}
-        <div style={{ borderTop: '1px solid #2a2a28', paddingTop: 16 }}>
-          <div style={{ color: '#b0aea5', fontSize: 11, marginBottom: 10 }}>模拟参数</div>
-          {[
-            ['客户总数', statistics.totalCustomers],
+        <div style={{ color: '#d97757', fontWeight: 700, fontSize: 15, letterSpacing: 1 }}>银行排队数据</div>
+        <div style={{ borderTop: '1px solid #2a2a28', paddingTop: 14 }}>
+          {([
+            ['总客户数', statistics.totalCustomers],
             ['平均等待', `${statistics.avgWaitTime.toFixed(1)} min`],
             ['仿真时长', `${statistics.totalSimulationTime.toFixed(1)} min`],
-          ].map(([label, val]) => (
-            <div key={label as string} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+          ] as [string, string | number][]).map(([label, val]) => (
+            <div key={label} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
               <span style={{ color: '#6b6b68', fontSize: 11 }}>{label}</span>
               <span style={{ color: '#faf9f5', fontSize: 11 }}>{val}</span>
             </div>
           ))}
         </div>
-
-        {/* window utilizations */}
-        <div style={{ borderTop: '1px solid #2a2a28', paddingTop: 16 }}>
+        <div style={{ borderTop: '1px solid #2a2a28', paddingTop: 14 }}>
           <div style={{ color: '#b0aea5', fontSize: 11, marginBottom: 10 }}>窗口利用率</div>
           {windows.slice(0, 4).map((w, i) => {
-            const util = Math.min(1, w.totalServiceTime / Math.max(1, statistics.totalSimulationTime));
-            const col = PALETTE[i % PALETTE.length];
+            const util = utilization[i] ?? 0;
+            const col = PALETTE[i];
             return (
               <div key={w.id} style={{ marginBottom: 8 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
@@ -316,19 +337,8 @@ export default function AlgorithmicArt({ statistics, windows, customers }: Algor
           })}
         </div>
       </div>
-
       {/* canvas */}
-      <div ref={containerRef} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }} />
+      <div ref={containerRef} style={{ flex: 1 }} />
     </div>
   );
 }
-
-const btnStyle: React.CSSProperties = {
-  background: '#2a2a28',
-  border: '1px solid #3a3a38',
-  color: '#faf9f5',
-  borderRadius: 6,
-  padding: '4px 10px',
-  cursor: 'pointer',
-  fontSize: 13,
-};
