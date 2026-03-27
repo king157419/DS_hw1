@@ -64,7 +64,6 @@ interface CustomerInput {
 
 export default function BankSimulationPage() {
   // 状态管理
-  const [windowCount, setWindowCount] = useState<number>(4);
   const [customers, setCustomers] = useState<CustomerInput[]>([
     { arrivalTime: '0', serviceTime: '5' },
     { arrivalTime: '1', serviceTime: '8' },
@@ -76,15 +75,16 @@ export default function BankSimulationPage() {
   const [activeTab, setActiveTab] = useState<'input' | 'result' | 'timeline' | 'dynamic'>('input');
   const [error, setError] = useState<string | null>(null);
 
-  // 真实场景模拟状态
+  // 随机模拟配置
   const [bankConfig, setBankConfig] = useState({
     closeTime: 50, // 模拟客户数量
     avgServiceTime: 5 // 平均服务时间
   });
-  const [realisticResult, setRealisticResult] = useState<SimulationResult | null>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [speed, setSpeed] = useState(1);
+
+  // 动态可视化状态（统一，所有模拟方式共用）
+  const [resultIsPlaying, setResultIsPlaying] = useState(false);
+  const [resultCurrentTime, setResultCurrentTime] = useState(0);
+  const [resultSpeed, setResultSpeed] = useState(1);
 
   // 添加客户
   const addCustomer = useCallback(() => {
@@ -127,7 +127,6 @@ export default function BankSimulationPage() {
       }
 
       // 更新界面数据
-      setWindowCount(testData.testData.windowCount);
       setCustomers(testData.testData.customers.map((c: { arrivalTime: number; serviceTime: number }) => ({
         arrivalTime: c.arrivalTime.toString(),
         serviceTime: c.serviceTime.toString(),
@@ -142,7 +141,7 @@ export default function BankSimulationPage() {
           body: JSON.stringify({
             action: 'simulate',
             data: {
-              windowCount: testData.testData.windowCount,
+              windowCount: 4,
               customers: testData.testData.customers,
             },
           }),
@@ -151,6 +150,8 @@ export default function BankSimulationPage() {
 
         if (simData.success) {
           setResult(simData.result);
+          setResultCurrentTime(0);
+          setResultIsPlaying(false);
           setActiveTab('result');
         } else {
           setError(simData.error || '模拟失败');
@@ -181,7 +182,7 @@ export default function BankSimulationPage() {
         body: JSON.stringify({
           action: 'simulate',
           data: {
-            windowCount,
+            windowCount: 4,
             customers: customerData,
           },
         }),
@@ -191,6 +192,8 @@ export default function BankSimulationPage() {
 
       if (data.success) {
         setResult(data.result);
+        setResultCurrentTime(0);
+        setResultIsPlaying(false);
         setValidation(data.validation);
         setActiveTab('result');
       } else {
@@ -202,7 +205,7 @@ export default function BankSimulationPage() {
     } finally {
       setLoading(false);
     }
-  }, [windowCount, customers]);
+  }, [customers]);
 
   // 清空数据
   const clearData = useCallback(() => {
@@ -253,8 +256,10 @@ export default function BankSimulationPage() {
       const data = await response.json();
 
       if (data.success) {
-        setRealisticResult(data.result);
-        setCurrentTime(0);
+        setResult(data.result);
+        setResultCurrentTime(0);
+        setResultIsPlaying(false);
+        setActiveTab('dynamic');
       } else {
         setError(data.error || '模拟失败');
       }
@@ -287,10 +292,10 @@ export default function BankSimulationPage() {
         <div className="flex justify-center mb-8">
           <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-lg p-1.5 flex gap-1 flex-wrap justify-center">
             {[
-              { key: 'input', label: '测试数据', icon: '🧪' },
+              { key: 'input', label: '数据输入', icon: '📝' },
               { key: 'result', label: '模拟结果', icon: '📊' },
               { key: 'timeline', label: '时间线', icon: '⏱️' },
-              { key: 'dynamic', label: '随机模拟', icon: '🎲' },
+              { key: 'dynamic', label: '动态演示', icon: '🎬' },
             ].map(tab => (
               <button
                 key={tab.key}
@@ -346,13 +351,90 @@ export default function BankSimulationPage() {
           </div>
         )}
 
-        {/* 测试数据面板 */}
+        {/* 数据输入面板 */}
         {activeTab === 'input' && (
-          <div className="card p-8 animate-slide-up">
-            <h2 className="text-2xl font-bold text-gray-800 mb-4">程序测试</h2>
-            <p className="text-gray-600 mb-8 text-lg">
-              使用三种测试数据验证程序的稳定性（固定4个窗口）
-            </p>
+          <div className="space-y-6 animate-slide-up">
+
+            {/* 手动输入区 */}
+            <div className="card p-8">
+              <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-2">
+                <span className="text-2xl">✏️</span> 手动输入数据
+              </h2>
+
+              {/* 客户数据表格 */}
+              <div className="overflow-x-auto mb-4">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b-2 border-indigo-200">
+                      <th className="px-4 py-2 text-left text-gray-700 font-bold">客户</th>
+                      <th className="px-4 py-2 text-left text-gray-700 font-bold">到达时间（分钟）</th>
+                      <th className="px-4 py-2 text-left text-gray-700 font-bold">服务时间（分钟）</th>
+                      <th className="px-4 py-2 text-left text-gray-700 font-bold">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {customers.map((c, i) => (
+                      <tr key={i} className="border-b border-gray-100 hover:bg-indigo-50/30">
+                        <td className="px-4 py-2 font-medium text-gray-600">#{i + 1}</td>
+                        <td className="px-4 py-2">
+                          <input
+                            type="number"
+                            value={c.arrivalTime}
+                            onChange={(e) => updateCustomer(i, 'arrivalTime', e.target.value)}
+                            className="w-28 border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                            placeholder="0"
+                            min="0"
+                          />
+                        </td>
+                        <td className="px-4 py-2">
+                          <input
+                            type="number"
+                            value={c.serviceTime}
+                            onChange={(e) => updateCustomer(i, 'serviceTime', e.target.value)}
+                            className="w-28 border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                            placeholder="1"
+                            min="1"
+                          />
+                        </td>
+                        <td className="px-4 py-2">
+                          <button
+                            onClick={() => removeCustomer(i)}
+                            disabled={customers.length <= 1}
+                            className="text-red-500 hover:text-red-700 disabled:opacity-30 font-bold px-2 py-1 rounded"
+                          >
+                            删除
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* 添加/运行按钮 */}
+              <div className="flex gap-3 flex-wrap">
+                <button
+                  onClick={addCustomer}
+                  className="px-5 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-xl transition-all"
+                >
+                  + 添加客户
+                </button>
+                <button
+                  onClick={runSimulation}
+                  disabled={loading}
+                  className="px-6 py-2.5 bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-bold rounded-xl hover:opacity-90 disabled:opacity-50 shadow-md transition-all"
+                >
+                  {loading ? '运行中...' : '▶ 开始模拟'}
+                </button>
+              </div>
+            </div>
+
+            {/* 测试数据区 */}
+            <div className="card p-8">
+              <h2 className="text-2xl font-bold text-gray-800 mb-4">程序测试</h2>
+              <p className="text-gray-600 mb-8 text-lg">
+                使用三种测试数据验证程序的稳定性（固定4个窗口）
+              </p>
 
             {/* 三个测试按钮 */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
@@ -417,47 +499,100 @@ export default function BankSimulationPage() {
               </div>
             </div>
 
-            {/* 当前测试数据预览 */}
-            {customers.length > 0 && (
+            {/* 当前测试数据预览 — 三种测试数据均显示 */}
+            {validation && (
               <div className="bg-gray-50 rounded-2xl p-6">
-                <h3 className="font-semibold text-gray-700 mb-4">当前测试数据预览</h3>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-gray-300">
-                        <th className="px-4 py-2 text-left text-gray-800 font-bold">客户</th>
-                        <th className="px-4 py-2 text-left text-gray-800 font-bold">到达时间</th>
-                        <th className="px-4 py-2 text-left text-gray-800 font-bold">服务时间</th>
-                        <th className="px-4 py-2 text-left text-gray-800 font-bold">状态</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {customers.slice(0, 5).map((c, i) => (
-                        <tr key={i} className="border-b border-gray-200 bg-white">
-                          <td className="px-4 py-2 text-gray-800 font-medium">#{i + 1}</td>
-                          <td className="px-4 py-2 text-gray-700">{c.arrivalTime} 分钟</td>
-                          <td className="px-4 py-2 text-gray-700">{c.serviceTime} 分钟</td>
-                          <td className="px-4 py-2">
-                            {parseFloat(c.arrivalTime) < 0 || parseFloat(c.serviceTime) <= 0 ? (
-                              <span className="text-red-600 font-bold">❌ 非法</span>
-                            ) : (
-                              <span className="text-green-600 font-bold">✓ 合法</span>
-                            )}
-                          </td>
+                <h3 className="font-semibold text-gray-700 mb-4">
+                  测试数据内容（{customers.length} 个客户）
+                </h3>
+                {customers.length === 0 ? (
+                  <div className="text-center py-6 text-gray-500">
+                    <div className="text-4xl mb-2">📭</div>
+                    <div>测试数据集为空（整体非法：无客户数据）</div>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-gray-300">
+                          <th className="px-4 py-2 text-left text-gray-800 font-bold">客户</th>
+                          <th className="px-4 py-2 text-left text-gray-800 font-bold">到达时间（分钟）</th>
+                          <th className="px-4 py-2 text-left text-gray-800 font-bold">服务时间（分钟）</th>
+                          <th className="px-4 py-2 text-left text-gray-800 font-bold">状态</th>
                         </tr>
-                      ))}
-                      {customers.length > 5 && (
-                        <tr className="bg-white">
-                          <td colSpan={4} className="px-4 py-2 text-gray-600 text-center">
-                            ... 还有 {customers.length - 5} 条数据
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
+                      </thead>
+                      <tbody>
+                        {customers.map((c, i) => {
+                          const isInvalid = parseFloat(c.arrivalTime) < 0 || parseFloat(c.serviceTime) <= 0;
+                          return (
+                            <tr key={i} className={`border-b ${isInvalid ? 'bg-red-50' : 'bg-white'}`}>
+                              <td className="px-4 py-2 text-gray-800 font-medium">#{i + 1}</td>
+                              <td className={`px-4 py-2 ${isInvalid && parseFloat(c.arrivalTime) < 0 ? 'text-red-600 font-bold' : 'text-gray-700'}`}>
+                                {c.arrivalTime}
+                              </td>
+                              <td className={`px-4 py-2 ${isInvalid && parseFloat(c.serviceTime) <= 0 ? 'text-red-600 font-bold' : 'text-gray-700'}`}>
+                                {c.serviceTime}
+                              </td>
+                              <td className="px-4 py-2">
+                                {isInvalid ? (
+                                  <span className="text-red-600 font-bold">❌ 非法</span>
+                                ) : (
+                                  <span className="text-green-600 font-bold">✓ 合法</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             )}
+            </div>
+
+            {/* Section C — 随机生成 */}
+            <div className="card p-8">
+              <h2 className="text-2xl font-bold text-gray-800 mb-2 flex items-center gap-2">
+                <span className="text-2xl">🎲</span> 随机生成模拟
+              </h2>
+              <p className="text-gray-600 mb-6">自动生成随机客户数据并立即运行模拟，结果可在「模拟结果」和「动态演示」Tab 查看</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                <div className="bg-white rounded-2xl p-6 border-2 border-indigo-300 shadow">
+                  <h3 className="text-lg font-bold text-gray-800 mb-4">客户数量</h3>
+                  <label className="block text-sm font-bold text-gray-700 mb-2">
+                    模拟客户数: <span className="text-indigo-600 text-xl">{bankConfig.closeTime}</span> 人
+                  </label>
+                  <input
+                    type="range" min="10" max="200" step="10"
+                    value={bankConfig.closeTime}
+                    onChange={(e) => setBankConfig({ ...bankConfig, closeTime: Number(e.target.value) })}
+                    className="w-full h-3 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <div className="flex justify-between text-xs text-gray-500 mt-1"><span>10人</span><span>200人</span></div>
+                </div>
+                <div className="bg-white rounded-2xl p-6 border-2 border-emerald-300 shadow">
+                  <h3 className="text-lg font-bold text-gray-800 mb-4">平均服务时间</h3>
+                  <label className="block text-sm font-bold text-gray-700 mb-2">
+                    平均服务时间: <span className="text-emerald-600 text-xl">{bankConfig.avgServiceTime}</span> 分钟
+                  </label>
+                  <input
+                    type="range" min="2" max="15"
+                    value={bankConfig.avgServiceTime}
+                    onChange={(e) => setBankConfig({ ...bankConfig, avgServiceTime: Number(e.target.value) })}
+                    className="w-full h-3 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <div className="flex justify-between text-xs text-gray-500 mt-1"><span>2分钟</span><span>15分钟</span></div>
+                </div>
+              </div>
+              <button
+                onClick={runRealisticSimulation}
+                disabled={loading}
+                className="w-full py-4 bg-gradient-to-r from-indigo-500 to-purple-500 text-white text-lg font-bold rounded-xl hover:from-indigo-600 hover:to-purple-600 disabled:opacity-50 shadow-lg"
+              >
+                {loading ? '运行中...' : '🎲 生成随机客户并模拟'}
+              </button>
+            </div>
           </div>
         )}
 
@@ -607,6 +742,22 @@ export default function BankSimulationPage() {
                 </table>
               </div>
             </div>
+
+            {/* 动态窗口可视化 */}
+            <div className="card p-8">
+              <h2 className="text-2xl font-bold text-gray-800 mb-4 flex items-center gap-2">
+                <span className="text-2xl">🎬</span> 窗口动态演示
+              </h2>
+              <DynamicQueueVisualization
+                simulationResult={result}
+                isPlaying={resultIsPlaying}
+                speed={resultSpeed}
+                currentTime={resultCurrentTime}
+                onPlayPause={() => setResultIsPlaying(p => !p)}
+                onSpeedChange={setResultSpeed}
+                onTimeChange={setResultCurrentTime}
+              />
+            </div>
           </div>
           ) : (
             <div className="card p-16 text-center animate-fade-in">
@@ -614,7 +765,7 @@ export default function BankSimulationPage() {
                 <span className="text-5xl">📊</span>
               </div>
               <h3 className="text-2xl font-bold text-gray-700 mb-3">暂无模拟结果</h3>
-              <p className="text-gray-700 font-medium text-lg">请先在"测试数据"标签页选择测试类型并运行模拟</p>
+              <p className="text-gray-700 font-medium text-lg">请先在"数据输入"标签页手动输入数据或选择测试类型并运行模拟</p>
             </div>
           )
         )}
@@ -672,95 +823,36 @@ export default function BankSimulationPage() {
                 <span className="text-5xl">⏱️</span>
               </div>
               <h3 className="text-2xl font-bold text-gray-700 mb-3">暂无时间线数据</h3>
-              <p className="text-gray-700 font-medium text-lg">请先在"测试数据"标签页选择测试类型并运行模拟</p>
+              <p className="text-gray-700 font-medium text-lg">请先在"数据输入"标签页手动输入数据或选择测试类型并运行模拟</p>
             </div>
           )
         )}
 
-        {/* 动态模拟面板 */}
+        {/* 动态演示面板 */}
         {activeTab === 'dynamic' && (
           <div className="card p-8 animate-slide-up">
-            <h2 className="text-2xl font-bold text-gray-800 mb-6">随机客户模拟</h2>
+            <h2 className="text-2xl font-bold text-gray-800 mb-6">动态队列演示</h2>
             <p className="text-gray-600 mb-6 text-lg">
-              固定4个窗口，客户随机到达，自动选择最短队列排队
+              实时演示客户排队与服务过程 — 可在「数据输入」Tab 触发模拟后查看
             </p>
 
-            {/* 简化配置 */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-              <div className="bg-white rounded-2xl p-6 border-2 border-indigo-300 shadow-lg">
-                <h3 className="text-lg font-bold text-gray-800 mb-4">客户数量</h3>
-                <div>
-                  <label className="block text-sm font-bold text-gray-700 mb-2">
-                    模拟客户数: <span className="text-indigo-600 text-xl">{bankConfig.closeTime}</span> 人
-                  </label>
-                  <input
-                    type="range"
-                    min="10"
-                    max="200"
-                    step="10"
-                    value={bankConfig.closeTime}
-                    onChange={(e) => setBankConfig({ ...bankConfig, closeTime: Number(e.target.value) })}
-                    className="w-full h-3 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                  />
-                  <div className="flex justify-between text-xs text-gray-700 font-medium mt-1">
-                    <span>10人</span>
-                    <span>200人</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="bg-white rounded-2xl p-6 border-2 border-emerald-300 shadow-lg">
-                <h3 className="text-lg font-bold text-gray-800 mb-4">服务时间范围</h3>
-                <div>
-                  <label className="block text-sm font-bold text-gray-700 mb-2">
-                    平均服务时间: <span className="text-emerald-600 text-xl">{bankConfig.avgServiceTime}</span> 分钟
-                  </label>
-                  <input
-                    type="range"
-                    min="2"
-                    max="15"
-                    value={bankConfig.avgServiceTime}
-                    onChange={(e) => setBankConfig({ ...bankConfig, avgServiceTime: Number(e.target.value) })}
-                    className="w-full h-3 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                  />
-                  <div className="flex justify-between text-xs text-gray-700 font-medium mt-1">
-                    <span>2分钟</span>
-                    <span>15分钟</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* 运行按钮 */}
-            <div className="flex gap-4 mb-8">
-              <button
-                onClick={runRealisticSimulation}
-                disabled={loading}
-                className="flex-1 py-4 bg-gradient-to-r from-indigo-500 to-purple-500 text-white text-lg font-bold rounded-xl hover:from-indigo-600 hover:to-purple-600 disabled:opacity-50 shadow-lg"
-              >
-                {loading ? (
-                  <>
-                    <span className="animate-pulse mr-2">⏳</span> 运行中...
-                  </>
-                ) : (
-                  <>
-                    <span className="mr-2">🎲</span> 生成随机客户并模拟
-                  </>
-                )}
-              </button>
-            </div>
 
             {/* 可视化区域 */}
-            {realisticResult && (
+            {result ? (
               <DynamicQueueVisualization
-                simulationResult={realisticResult}
-                isPlaying={isPlaying}
-                speed={speed}
-                currentTime={currentTime}
-                onPlayPause={() => setIsPlaying(!isPlaying)}
-                onSpeedChange={setSpeed}
-                onTimeChange={setCurrentTime}
+                simulationResult={result}
+                isPlaying={resultIsPlaying}
+                speed={resultSpeed}
+                currentTime={resultCurrentTime}
+                onPlayPause={() => setResultIsPlaying(!resultIsPlaying)}
+                onSpeedChange={setResultSpeed}
+                onTimeChange={setResultCurrentTime}
               />
+            ) : (
+              <div className="text-center py-16 text-gray-400">
+                <div className="text-6xl mb-4">🎬</div>
+                <p className="text-lg font-medium">请先运行一次模拟（数据输入 Tab 或随机生成）</p>
+              </div>
             )}
           </div>
         )}
@@ -851,15 +943,24 @@ function DynamicQueueVisualization({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animationRef = useRef<number | null>(null);
   const lastTimeRef = useRef<number>(0);
+  const currentTimeRef = useRef<number>(currentTime);
 
-  // 动画循环
+  // 同步 currentTime 到 ref，供动画loop读取
+  useEffect(() => {
+    currentTimeRef.current = currentTime;
+  }, [currentTime]);
+
+  // 动画循环 — 依赖不含 currentTime，避免每帧重建
   useEffect(() => {
     if (!isPlaying) {
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current);
       }
+      lastTimeRef.current = 0;
       return;
     }
+
+    const totalDuration = simulationResult.statistics.totalSimulationTime;
 
     const animate = (timestamp: number) => {
       if (!lastTimeRef.current) {
@@ -869,8 +970,7 @@ function DynamicQueueVisualization({
       const deltaTime = timestamp - lastTimeRef.current;
       lastTimeRef.current = timestamp;
 
-      const newTime = currentTime + (deltaTime * speed) / 1000;
-      const totalDuration = simulationResult.statistics.totalSimulationTime;
+      const newTime = currentTimeRef.current + (deltaTime * speed) / 1000;
 
       if (newTime >= totalDuration) {
         onTimeChange(totalDuration);
@@ -889,7 +989,7 @@ function DynamicQueueVisualization({
         cancelAnimationFrame(animationRef.current);
       }
     };
-  }, [isPlaying, speed, currentTime, simulationResult.statistics.totalSimulationTime, onPlayPause, onTimeChange]);
+  }, [isPlaying, speed, simulationResult.statistics.totalSimulationTime, onPlayPause, onTimeChange]);
 
   // 绘制可视化
   useEffect(() => {
@@ -970,22 +1070,27 @@ function DynamicQueueVisualization({
         ctx.fillText('空闲', x + windowWidth / 2, y + 60);
       }
 
-      // 绘制等待队列
+      // 绘制等待队列（向上垂直延伸）
+      const queueCenterX = x + windowWidth / 2;
+      const queueRadius = 9;
+      const queueSpacing = 20;
       windowData.queue.slice(0, 8).forEach((customer, queueIndex) => {
-        const queueX = x + windowWidth / 2;
-        const queueY = y - 35 - queueIndex * 30;
-        drawCustomer(ctx, queueX, queueY, '#f59e0b');
-        ctx.fillStyle = '#475569';
-        ctx.font = '9px sans-serif';
+        const queueX = queueCenterX;
+        const queueY = y - 15 - queueIndex * queueSpacing;
+        drawCustomer(ctx, queueX, queueY, '#f59e0b', queueRadius);
+        ctx.fillStyle = '#1e293b';
+        ctx.font = 'bold 8px sans-serif';
         ctx.textAlign = 'center';
-        ctx.fillText(`${customer.id}`, queueX, queueY + 4);
+        ctx.fillText(`${customer.id}`, queueX, queueY + 3);
       });
 
-      // 显示队列长度
+      // 显示队列溢出数量
       if (windowData.queue.length > 8) {
+        const overflowY = y - 15 - 8 * queueSpacing - 8;
         ctx.fillStyle = '#64748b';
-        ctx.font = '10px sans-serif';
-        ctx.fillText(`+${windowData.queue.length - 8}`, x + windowWidth / 2, y - 35 - 8 * 30);
+        ctx.font = 'bold 10px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(`+${windowData.queue.length - 8}`, queueCenterX, overflowY);
       }
     });
 
@@ -1029,16 +1134,16 @@ function DynamicQueueVisualization({
   }, [currentTime, simulationResult]);
 
   // 绘制客户图标
-  const drawCustomer = (ctx: CanvasRenderingContext2D, x: number, y: number, color: string) => {
+  const drawCustomer = (ctx: CanvasRenderingContext2D, x: number, y: number, color: string, radius = 14) => {
     ctx.fillStyle = color;
     ctx.beginPath();
-    ctx.arc(x, y, 14, 0, Math.PI * 2);
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
     ctx.fill();
 
     // 添加高光
     ctx.fillStyle = 'rgba(255,255,255,0.3)';
     ctx.beginPath();
-    ctx.arc(x - 4, y - 4, 6, 0, Math.PI * 2);
+    ctx.arc(x - radius * 0.3, y - radius * 0.3, radius * 0.43, 0, Math.PI * 2);
     ctx.fill();
   };
 
@@ -1080,7 +1185,7 @@ function DynamicQueueVisualization({
       <canvas
         ref={canvasRef}
         width={900}
-        height={400}
+        height={500}
         className="w-full bg-white rounded-2xl border border-gray-200 shadow-inner"
       />
 

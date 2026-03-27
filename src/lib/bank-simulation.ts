@@ -277,10 +277,8 @@ export class BankSimulation {
    * 运行模拟
    */
   run(): SimulationResult {
-    // 按时间排序事件
-    this.events.sort((a, b) => a.time - b.time);
-
     while (this.events.length > 0) {
+      this.events.sort((a, b) => a.time - b.time);
       const event = this.events.shift()!;
       this.currentTime = event.time;
 
@@ -305,7 +303,10 @@ export class BankSimulation {
       ? Math.max(...completedCustomers.map(c => c.endTime))
       : 0;
 
-    // 计算窗口利用率，限制最大值为1
+    // 计算各窗口空闲时间和利用率
+    this.windows.forEach(w => {
+      w.idleTime = Math.max(0, totalSimulationTime - w.totalServiceTime);
+    });
     const windowUtilization = this.windows.map(w => {
       if (totalSimulationTime === 0) return 0;
       return Math.min(w.totalServiceTime / totalSimulationTime, 1);
