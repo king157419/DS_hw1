@@ -33,15 +33,28 @@ export interface P5QueueVisualizationProps {
 }
 
 interface Particle {
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  alpha: number;
-  r: number;
+  x: number; y: number;
+  vx: number; vy: number;
+  alpha: number; r: number;
   col: [number, number, number];
 }
 
+interface FlyingDot {
+  id: number;
+  x: number; y: number;
+  tx: number; ty: number;
+  cx1: number; cy1: number;
+  progress: number;
+  col: [number, number, number];
+  trail: { x: number; y: number; a: number }[];
+}
+
+interface PulseRing {
+  x: number; y: number;
+  r: number; maxR: number;
+  alpha: number;
+  col: [number, number, number];
+}
 export default function P5QueueVisualization({
   simulationResult,
   isPlaying,
@@ -60,7 +73,6 @@ export default function P5QueueVisualization({
   const onPlayPauseRef = useRef(onPlayPause);
   const lastRealTimeRef = useRef<number>(0);
 
-  // keep refs in sync
   useEffect(() => { currentTimeRef.current = currentTime; }, [currentTime]);
   useEffect(() => { simRef.current = simulationResult; }, [simulationResult]);
   useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
@@ -80,30 +92,47 @@ export default function P5QueueVisualization({
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const sketch = (p: any) => {
         const W = 900;
-        const H = 500;
-        const WIN_COUNT = 4;
-        const WIN_W = 90;
-        const WIN_H = 100;
-        const SPACING = (W - WIN_COUNT * WIN_W) / (WIN_COUNT + 1);
-        const WIN_Y = H - WIN_H - 50;
+        const H = 560;
 
-        // particles for completed customers
+        // Layout computed from window count
+        const WIN_COUNT = simRef.current.windows.length || 4;
+        const WIN_W = Math.min(130, Math.floor((W - 80) / WIN_COUNT) - 20);
+        const WIN_H = 130;
+        const SPACING = (W - WIN_COUNT * WIN_W) / (WIN_COUNT + 1);
+        const WIN_Y = H - WIN_H - 60;
+        const ENTRANCE_X = W / 2;
+        const ENTRANCE_Y = H - 20;
+
         const particles: Particle[] = [];
-        // pulse rings per window
-        const pulses: { x: number; y: number; r: number; alpha: number }[] = [];
-        // trail dots for arriving customers (flying animation)
-        const flyingCustomers: {
-          id: number;
-          x: number; y: number;
-          tx: number; ty: number;
-          progress: number;
-          col: [number, number, number];
-        }[] = [];
+        const pulses: PulseRing[] = [];
+        const flyingDots: FlyingDot[] = [];
+        const entranceRipples: { r: number; alpha: number }[] = [];
         const seenArrived = new Set<number>();
         const seenCompleted = new Set<number>();
+        const seenServiceStart = new Set<number>();
 
         const winX = (i: number) => SPACING + i * (WIN_W + SPACING) + WIN_W / 2;
-        const winY = () => WIN_Y + WIN_H / 2;
+        const winTop = () => WIN_Y;
+
+        // Wait time → color: green (0 min) → yellow (5 min) → red (10+ min)
+        function waitCol(wt: number): [number, number, number] {
+          const t = Math.min(1, wt / 10);
+          if (t < 0.5) {
+            return [Math.round(34 + t * 2 * (234 - 34)), Math.round(197 - t * 2 * (197 - 179)), Math.round(94 + t * 2 * (8 - 94))];
+          }
+          const s = (t - 0.5) * 2;
+          return [Math.round(234 + s * (239 - 234)), Math.round(179 - s * (179 - 68)), Math.round(8 + s * (68 - 8))];
+        }
+
+        // Cubic bezier point
+        function bezier(t: number, x0: number, y0: number, x1: number, y1: number, x2: number, y2: number, x3: number, y3: number): [number, number] {
+          const u = 1 - t;
+          const b0 = u * u * u;
+          const b1 = 3 * u * u * t;
+          const b2 = 3 * u * t * t;
+          const b3 = t * t * t;
+          return [b0 * x0 + b1 * x1 + b2 * x2 + b3 * x3, b0 * y0 + b1 * y1 + b2 * y2 + b3 * y3];
+        }
 
         p.setup = () => {
           p.createCanvas(W, H);
@@ -113,7 +142,7 @@ export default function P5QueueVisualization({
         };
 
         p.draw = () => {
-          // advance simulation time
+          // --- advance sim time ---
           if (isPlayingRef.current) {
             const now = performance.now();
             if (lastRealTimeRef.current === 0) lastRealTimeRef.current = now;
@@ -122,9 +151,11 @@ export default function P5QueueVisualization({
             const total = simRef.current.statistics.totalSimulationTime;
             const next = currentTimeRef.current + (delta * speedRef.current) / 1000;
             if (next >= total) {
+              currentTimeRef.current = total;
               onTimeChangeRef.current(total);
               onPlayPauseRef.current();
             } else {
+              currentTimeRef.current = next;
               onTimeChangeRef.current(next);
             }
           } else {
@@ -133,221 +164,320 @@ export default function P5QueueVisualization({
 
           const t = currentTimeRef.current;
           const sim = simRef.current;
+          const total = sim.statistics.totalSimulationTime;
 
-          // detect newly arriving customers → spawn flying dot
+          // --- detect events ---
           sim.customers.forEach(c => {
             if (c.arrivalTime <= t && !seenArrived.has(c.id)) {
               seenArrived.add(c.id);
-              const wx = winX(c.windowId - 1);
-              const wy = WIN_Y - 20;
-              flyingCustomers.push({
-                id: c.id,
-                x: p.random(50, W - 50),
-                y: H + 20,
-                tx: wx,
-                ty: wy,
+              const wi = c.windowId - 1;
+              const tx = winX(wi);
+              const ty = winTop() - 20;
+              // control points for S-curve bezier
+              const cx1 = ENTRANCE_X + (tx - ENTRANCE_X) * 0.2;
+              const cy1 = ENTRANCE_Y - 120;
+              flyingDots.push({
+                id: c.id, x: ENTRANCE_X, y: ENTRANCE_Y,
+                tx, ty, cx1, cy1,
                 progress: 0,
-                col: [99, 102, 241],
+                col: waitCol(c.waitTime),
+                trail: [],
               });
+              // entrance ripple
+              entranceRipples.push({ r: 8, alpha: 0.8 });
             }
           });
 
-          // detect newly completed → burst particles
+          sim.customers.forEach(c => {
+            if (c.startTime <= t && !seenServiceStart.has(c.id)) {
+              seenServiceStart.add(c.id);
+              const wi = c.windowId - 1;
+              pulses.push({ x: winX(wi), y: WIN_Y + WIN_H / 2, r: 15, maxR: 55, alpha: 0.9, col: [99, 102, 241] });
+            }
+          });
+
           sim.customers.forEach(c => {
             if (c.endTime <= t && !seenCompleted.has(c.id)) {
               seenCompleted.add(c.id);
               const wx = winX(c.windowId - 1);
-              const wy = winY();
-              for (let i = 0; i < 18; i++) {
+              const wy = WIN_Y + WIN_H / 2;
+              for (let i = 0; i < 22; i++) {
                 const angle = p.random(p.TWO_PI);
-                const spd = p.random(1.5, 4);
+                const spd = p.random(1.5, 4.5);
                 particles.push({
                   x: wx, y: wy,
                   vx: Math.cos(angle) * spd,
-                  vy: Math.sin(angle) * spd,
-                  alpha: 1,
-                  r: p.random(4, 8),
-                  col: [16, 185, 129],
+                  vy: Math.sin(angle) * spd - 1,
+                  alpha: 1, r: p.random(4, 9),
+                  col: i % 2 === 0 ? [251, 191, 36] : [16, 185, 129],
                 });
               }
-              pulses.push({ x: wx, y: wy, r: 20, alpha: 0.8 });
+              pulses.push({ x: wx, y: wy, r: 20, maxR: 70, alpha: 0.7, col: [16, 185, 129] });
             }
           });
 
-          // ── background ──
-          p.background(248, 250, 252);
+          // --- BACKGROUND: dark hall ---
+          p.background(18, 22, 36);
 
-          // ── grid lines ──
-          p.stroke(226, 232, 240);
-          p.strokeWeight(1);
-          for (let gx = 0; gx < W; gx += 60) {
-            p.line(gx, 0, gx, H);
-          }
-
-          // ── progress bar ──
-          const total = sim.statistics.totalSimulationTime;
-          const progress = total > 0 ? t / total : 0;
+          // marble floor tiles
           p.noStroke();
-          p.fill(226, 232, 240);
-          p.rect(20, 15, W - 40, 8, 4);
-          if (progress > 0) {
-            p.drawingContext.save();
-            const pg = ((p.drawingContext as unknown as CanvasRenderingContext2D)).createLinearGradient(20, 0, 20 + (W - 40) * progress, 0);
-            pg.addColorStop(0, '#6366f1');
-            pg.addColorStop(1, '#8b5cf6');
-            ((p.drawingContext as unknown as CanvasRenderingContext2D)).fillStyle = pg;
-            p.rect(20, 15, (W - 40) * progress, 8, 4);
-            p.drawingContext.restore();
+          for (let row = 0; row < 4; row++) {
+            for (let col2 = 0; col2 < 6; col2++) {
+              const tx2 = col2 * 150;
+              const ty2 = WIN_Y + WIN_H + 10 + row * 30;
+              const shade = 28 + (row + col2) % 2 * 6;
+              p.fill(shade, shade + 2, shade + 8, 0.8);
+              p.rect(tx2, ty2, 149, 29);
+            }
           }
 
-          // time label
-          const hour = Math.floor((t + 540) / 60);
-          const min = Math.floor((t + 540) % 60);
-          p.noStroke(); p.fill(30, 41, 59);
-          p.textSize(13); p.textAlign(p.LEFT, p.TOP);
-          p.text(`时间: ${hour}:${String(min).padStart(2, '0')}`, 20, 30);
-          const active = sim.customers.filter(c => c.arrivalTime <= t && c.endTime > t).length;
-          const done = sim.customers.filter(c => c.endTime <= t).length;
-          p.textAlign(p.RIGHT, p.TOP);
-          p.text(`在场: ${active}人  已完成: ${done}人`, W - 20, 30);
+          // subtle grid lines on upper area
+          p.stroke(40, 48, 72, 0.4);
+          p.strokeWeight(1);
+          for (let gx = 0; gx < W; gx += 80) p.line(gx, 0, gx, WIN_Y);
+          for (let gy = 40; gy < WIN_Y; gy += 60) p.line(0, gy, W, gy);
+          p.noStroke();
 
-          // ── pulse rings ──
+          // --- TITLE BAR ---
+          p.fill(24, 30, 52);
+          p.rect(0, 0, W, 46);
+          p.fill(148, 163, 240);
+          p.textSize(15); p.textAlign(p.LEFT, p.CENTER);
+          p.text('🏦  银行营业厅 · 实时模拟', 18, 23);
+          // live clock
+          const mins = Math.floor(t);
+          const secs = Math.floor((t - mins) * 60);
+          const clock = `T = ${mins}:${secs.toString().padStart(2, '0')} min`;
+          p.textAlign(p.RIGHT, p.CENTER);
+          p.fill(99, 102, 241); p.textSize(13);
+          p.text(clock, W - 16, 23);
+
+          // --- PROGRESS BAR ---
+          const progress = total > 0 ? t / total : 0;
+          p.fill(30, 38, 60);
+          p.rect(0, 46, W, 6);
+          p.fill(99, 102, 241);
+          p.rect(0, 46, W * progress, 6);
+
+          // --- ENTRANCE ---
+          p.fill(99, 102, 241, 0.15);
+          p.ellipse(ENTRANCE_X, ENTRANCE_Y + 5, 80, 18);
+          p.fill(148, 163, 240, 0.9);
+          p.textSize(11); p.textAlign(p.CENTER, p.CENTER);
+          p.text('入 口', ENTRANCE_X, ENTRANCE_Y + 5);
+
+          // entrance ripples
+          for (let i = entranceRipples.length - 1; i >= 0; i--) {
+            const rp = entranceRipples[i];
+            p.noFill(); p.stroke(99, 102, 241, rp.alpha); p.strokeWeight(1.5);
+            p.ellipse(ENTRANCE_X, ENTRANCE_Y, rp.r * 2.5, rp.r * 0.8);
+            p.noStroke();
+            rp.r += 2.5; rp.alpha -= 0.05;
+            if (rp.alpha <= 0) entranceRipples.splice(i, 1);
+          }
+          p.noStroke();
+
+          // --- PULSE RINGS ---
           for (let i = pulses.length - 1; i >= 0; i--) {
-            const pu = pulses[i];
-            p.noFill();
-            p.stroke(16, 185, 129, pu.alpha);
-            p.strokeWeight(2);
-            p.circle(pu.x, pu.y, pu.r * 2);
-            pu.r += 2.5;
-            pu.alpha -= 0.025;
-            if (pu.alpha <= 0) pulses.splice(i, 1);
+            const rng = pulses[i];
+            p.noFill(); p.stroke(rng.col[0], rng.col[1], rng.col[2], rng.alpha); p.strokeWeight(2);
+            p.circle(rng.x, rng.y, rng.r * 2);
+            p.noStroke();
+            rng.r += 2.5; rng.alpha -= 0.035;
+            if (rng.r >= rng.maxR) pulses.splice(i, 1);
           }
 
-          // ── burst particles ──
+          // --- PARTICLES ---
           for (let i = particles.length - 1; i >= 0; i--) {
-            const pt = particles[i];
-            p.noStroke();
-            p.fill(pt.col[0], pt.col[1], pt.col[2], pt.alpha);
-            p.circle(pt.x, pt.y, pt.r * 2);
-            pt.x += pt.vx; pt.y += pt.vy;
-            pt.vy += 0.08;
-            pt.alpha -= 0.022;
-            pt.r *= 0.97;
-            if (pt.alpha <= 0) particles.splice(i, 1);
+            const pp = particles[i];
+            p.fill(pp.col[0], pp.col[1], pp.col[2], pp.alpha);
+            p.circle(pp.x, pp.y, pp.r * 2);
+            pp.x += pp.vx; pp.y += pp.vy; pp.vy += 0.15;
+            pp.alpha -= 0.03; pp.r *= 0.97;
+            if (pp.alpha <= 0) particles.splice(i, 1);
           }
 
-          // ── flying customers ──
-          for (let i = flyingCustomers.length - 1; i >= 0; i--) {
-            const fc = flyingCustomers[i];
-            fc.progress = Math.min(1, fc.progress + 0.04);
-            const ease = 1 - Math.pow(1 - fc.progress, 3);
-            fc.x = p.lerp(fc.x, fc.tx, ease * 0.12);
-            fc.y = p.lerp(fc.y, fc.ty, ease * 0.12);
+          // --- FLYING DOTS (bezier) ---
+          for (let i = flyingDots.length - 1; i >= 0; i--) {
+            const fd = flyingDots[i];
+            fd.progress = Math.min(1, fd.progress + 0.025);
+            const [bx, by] = bezier(fd.progress,
+              ENTRANCE_X, ENTRANCE_Y,
+              fd.cx1, fd.cy1,
+              fd.tx, fd.ty - 60,
+              fd.tx, fd.ty);
             // trail
-            p.noStroke();
-            p.fill(fc.col[0], fc.col[1], fc.col[2], 0.25);
-            p.circle(fc.x, fc.y, 12);
-            p.fill(fc.col[0], fc.col[1], fc.col[2], 0.8);
-            p.circle(fc.x, fc.y, 8);
-            if (fc.progress >= 1) flyingCustomers.splice(i, 1);
+            fd.trail.push({ x: bx, y: by, a: 0.6 });
+            if (fd.trail.length > 10) fd.trail.shift();
+            fd.trail.forEach((tr, ti) => {
+              const ta = tr.a * (ti / fd.trail.length);
+              p.fill(fd.col[0], fd.col[1], fd.col[2], ta * 0.5);
+              p.circle(tr.x, tr.y, 8);
+            });
+            // dot
+            p.fill(fd.col[0], fd.col[1], fd.col[2]);
+            p.circle(bx, by, 14);
+            p.fill(255, 255, 255, 0.7); p.circle(bx - 2, by - 2, 4);
+            if (fd.progress >= 1) flyingDots.splice(i, 1);
           }
 
-          // ── windows ──
+          // --- WINDOWS ---
           for (let wi = 0; wi < WIN_COUNT; wi++) {
-            const wx = SPACING + wi * (WIN_W + SPACING);
-            const cx = wx + WIN_W / 2;
+            const cx = winX(wi);
+            const wy = WIN_Y;
+            const wx2 = cx - WIN_W / 2;
+
+            // compute state at t
             const serving = sim.customers.find(
               c => c.windowId === wi + 1 && c.startTime <= t && c.endTime > t
-            );
+            ) || null;
             const queue = sim.customers
               .filter(c => c.windowId === wi + 1 && c.arrivalTime <= t && c.startTime > t)
               .sort((a, b) => a.arrivalTime - b.arrivalTime);
 
-            // window box gradient
-            p.drawingContext.save();
-            const wg = ((p.drawingContext as unknown as CanvasRenderingContext2D)).createLinearGradient(wx, WIN_Y, wx, WIN_Y + WIN_H);
+            // window booth frame (wood-tone)
+            p.fill(45, 36, 28);
+            p.rect(wx2 - 4, wy - 4, WIN_W + 8, WIN_H + 8, 14);
+
+            // window glass panel (gradient via raw canvas API)
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const dctx = p.drawingContext as unknown as CanvasRenderingContext2D;
+            dctx.save();
+            const wg = dctx.createLinearGradient(wx2, wy, wx2, wy + WIN_H);
             if (serving) {
-              wg.addColorStop(0, '#6366f1');
-              wg.addColorStop(1, '#4f46e5');
+              wg.addColorStop(0, '#312e81'); wg.addColorStop(1, '#1e1b4b');
             } else {
-              wg.addColorStop(0, '#94a3b8');
-              wg.addColorStop(1, '#64748b');
+              wg.addColorStop(0, '#1e293b'); wg.addColorStop(1, '#0f172a');
             }
-            ((p.drawingContext as unknown as CanvasRenderingContext2D)).fillStyle = wg;
+            dctx.fillStyle = wg;
+            dctx.beginPath();
+            dctx.roundRect(wx2, wy, WIN_W, WIN_H, 10);
+            dctx.fill();
+            dctx.restore();
             p.noStroke();
-            p.rect(wx, WIN_Y, WIN_W, WIN_H, 12);
-            p.drawingContext.restore();
+
+            // glass shine
+            p.fill(255, 255, 255, 0.05);
+            p.rect(wx2 + 4, wy + 4, WIN_W / 2 - 6, WIN_H - 8, 8);
 
             // window label
-            p.fill(255); p.noStroke();
-            p.textSize(13); p.textAlign(p.CENTER, p.CENTER);
-            p.text(`窗口${wi + 1}`, cx, WIN_Y + 20);
+            p.fill(180, 190, 255); p.textSize(12); p.textAlign(p.CENTER, p.CENTER);
+            p.text(`窗口 ${wi + 1}`, cx, wy + 18);
 
-            // serving customer — pulsing circle
+            // counter line
+            p.fill(80, 90, 130, 0.6); p.rect(wx2 + 4, wy + WIN_H - 30, WIN_W - 8, 2, 1);
+
+            // serving customer — pulsing glow
             if (serving) {
-              const pulse = 0.8 + 0.2 * Math.sin(p.frameCount * 0.12);
-              p.noStroke();
-              p.fill(16, 185, 129, 0.3);
-              p.circle(cx, WIN_Y + 65, 36 * pulse);
-              p.fill(16, 185, 129);
-              p.circle(cx, WIN_Y + 65, 26);
-              // highlight
-              p.fill(255, 255, 255, 0.35);
-              p.circle(cx - 5, WIN_Y + 58, 8);
-              p.fill(255); p.textSize(9);
-              p.text(`#${serving.id}`, cx, WIN_Y + 65);
+              const pulse = 0.75 + 0.25 * Math.sin(p.frameCount * 0.1);
+              const [r, g, b] = waitCol(serving.waitTime);
+              p.fill(r, g, b, 0.25); p.circle(cx, wy + 72, 52 * pulse);
+              p.fill(r, g, b); p.circle(cx, wy + 72, 30);
+              p.fill(255, 255, 255, 0.4); p.circle(cx - 5, wy + 65, 8);
+              p.fill(255); p.textSize(9); p.textAlign(p.CENTER, p.CENTER);
+              p.text(`#${serving.id}`, cx, wy + 72);
+              // wait time badge
+              p.fill(99, 102, 241, 0.85); p.rect(cx - 20, wy + 87, 40, 14, 4);
+              p.fill(200, 204, 255); p.textSize(8);
+              p.text(`等${serving.waitTime.toFixed(1)}m`, cx, wy + 94);
             } else {
-              p.fill(203, 213, 225); p.textSize(12);
-              p.text('空闲', cx, WIN_Y + 65);
+              p.fill(60, 70, 100, 0.5); p.circle(cx, wy + 72, 26);
+              p.fill(100, 110, 150); p.textSize(10);
+              p.text('空闲', cx, wy + 72);
             }
 
-            // queue above window (upward)
-            queue.slice(0, 8).forEach((c, qi) => {
-              const qy = WIN_Y - 15 - qi * 20;
-              // flow color: amber with shimmer
-              const shimmer = 0.6 + 0.4 * Math.sin(p.frameCount * 0.1 + qi * 0.8);
-              p.noStroke();
-              p.fill(245, 158, 11, shimmer);
-              p.circle(cx, qy, 18);
-              p.fill(255, 255, 255, 0.3);
-              p.circle(cx - 3, qy - 3, 5);
-              p.fill(30, 41, 59); p.textSize(8);
+            // utilization mini-bar below booth
+            const winData = sim.windows[wi];
+            const util = winData ? Math.min(1, winData.totalServed / Math.max(1, sim.statistics.totalCustomers)) : 0;
+            p.fill(30, 38, 60); p.rect(wx2, wy + WIN_H + 8, WIN_W, 6, 3);
+            p.fill(serving ? 99 : 60, serving ? 102 : 80, serving ? 241 : 140);
+            p.rect(wx2, wy + WIN_H + 8, WIN_W * util, 6, 3);
+            p.fill(120, 130, 180); p.textSize(9); p.textAlign(p.CENTER, p.TOP);
+            p.text(`已服务 ${winData ? winData.totalServed : 0}`, cx, wy + WIN_H + 18);
+
+            // queue dots above window
+            const maxShow = Math.floor((WIN_Y - 60) / 22);
+            queue.slice(0, maxShow).forEach((c, qi) => {
+              const qy = WIN_Y - 18 - qi * 22;
+              const [r, g, b] = waitCol(c.waitTime);
+              const shimmer = 0.7 + 0.3 * Math.sin(p.frameCount * 0.08 + qi * 1.2);
+              p.fill(r, g, b, shimmer); p.circle(cx, qy, 18);
+              p.fill(255, 255, 255, 0.35); p.circle(cx - 3, qy - 3, 5);
+              p.fill(20, 20, 30); p.textSize(8); p.textAlign(p.CENTER, p.CENTER);
               p.text(`${c.id}`, cx, qy);
             });
-            if (queue.length > 8) {
-              p.fill(100, 116, 139); p.textSize(10);
-              p.text(`+${queue.length - 8}`, cx, WIN_Y - 15 - 8 * 20 - 10);
+            if (queue.length > maxShow) {
+              p.fill(148, 163, 240); p.textSize(10); p.textAlign(p.CENTER, p.CENTER);
+              p.text(`+${queue.length - maxShow}`, cx, WIN_Y - 18 - maxShow * 22 - 14);
             }
-          }
+          } // end for windows
+
+          // --- HUD (top-right stats) ---
+          const completed = sim.customers.filter(c => c.endTime <= t).length;
+          const waiting = sim.customers.filter(c => c.arrivalTime <= t && c.startTime > t).length;
+          const serving2 = sim.customers.filter(c => c.startTime <= t && c.endTime > t).length;
+
+          const hudX = W - 180;
+          const hudY = 56;
+          p.fill(18, 24, 48, 0.88); p.rect(hudX, hudY, 172, 82, 10);
+          p.fill(148, 163, 240); p.textSize(11); p.textAlign(p.LEFT, p.TOP);
+          const hudRows: [string, string, number[]][] = [
+            ['已完成', `${completed}`, [16, 185, 129]],
+            ['服务中', `${serving2}`, [99, 102, 241]],
+            ['等待中', `${waiting}`, [251, 191, 36]],
+            ['总客户', `${sim.statistics.totalCustomers}`, [148, 163, 240]],
+          ];
+          hudRows.forEach(([label, val, col3], idx) => {
+            const hx = hudX + 10;
+            const hy = hudY + 10 + idx * 17;
+            p.fill(col3[0], col3[1], col3[2]); p.circle(hx + 4, hy + 5, 8);
+            p.fill(180, 190, 230); p.text(label, hx + 12, hy);
+            p.fill(col3[0], col3[1], col3[2]); p.textAlign(p.RIGHT, p.TOP);
+            p.text(val, hudX + 162, hy);
+            p.textAlign(p.LEFT, p.TOP);
+          });
+
+          // --- COLOR LEGEND ---
+          p.fill(18, 24, 48, 0.75); p.rect(10, H - 52, 220, 36, 8);
+          const legendItems: [string, [number,number,number]][] = [
+            ['低等待', [34, 197, 94]],
+            ['中等待', [234, 179, 8]],
+            ['高等待', [239, 68, 68]],
+          ];
+          legendItems.forEach(([label, col4], idx) => {
+            const lx = 18 + idx * 72;
+            const ly = H - 40;
+            p.fill(col4[0], col4[1], col4[2]); p.circle(lx + 6, ly + 6, 12);
+            p.fill(180, 190, 230); p.textSize(10); p.textAlign(p.LEFT, p.CENTER);
+            p.text(label, lx + 14, ly + 6);
+          });
+
         }; // end draw
       }; // end sketch
 
       p5Instance = new p5(sketch, container);
     });
 
-    return () => {
-      p5Instance?.remove();
-    };
+    return () => { p5Instance?.remove(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [simulationResult]); // re-mount only when result changes
+  }, [simulationResult]);
 
-  // total simulation time for slider
   const total = simulationResult.statistics.totalSimulationTime;
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-4">
-        <h3 className="text-lg font-semibold text-gray-700">队列动态可视化</h3>
-        <div className="flex items-center gap-4">
-          <span className="text-sm text-gray-500">
-            速度: {speed}x
-          </span>
+        <div className="flex items-center gap-3">
+          <span className="text-sm font-semibold text-gray-600">播放速度:</span>
+          <span className="text-sm font-bold text-indigo-600">{speed}x</span>
           <input
-            type="range" min="0.5" max="5" step="0.5"
+            type="range" min="0.5" max="10" step="0.5"
             value={speed}
             onChange={e => onSpeedChange(parseFloat(e.target.value))}
-            className="w-24"
+            className="w-28"
           />
+        </div>
+        <div className="flex items-center gap-2">
           <button
             onClick={onPlayPause}
             className="px-4 py-2 bg-indigo-500 text-white rounded-lg font-bold hover:bg-indigo-600 text-sm"
@@ -364,10 +494,8 @@ export default function P5QueueVisualization({
         </div>
       </div>
 
-      {/* p5 canvas mount point */}
-      <div ref={containerRef} className="rounded-2xl overflow-hidden border border-gray-200 shadow-lg" />
+      <div ref={containerRef} className="rounded-2xl overflow-hidden border border-gray-700 shadow-2xl" />
 
-      {/* scrubber */}
       <input
         type="range" min="0" max={total} step="0.1"
         value={currentTime}
@@ -376,8 +504,19 @@ export default function P5QueueVisualization({
       />
       <div className="flex justify-between text-xs text-gray-400">
         <span>0 min</span>
+        <span>{Math.floor(currentTime)}:{Math.floor((currentTime % 1) * 60).toString().padStart(2,'0')} / {total.toFixed(1)} min</span>
         <span>{total.toFixed(1)} min</span>
       </div>
     </div>
   );
 }
+
+
+
+
+
+
+
+
+
+

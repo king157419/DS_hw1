@@ -78,10 +78,11 @@ export default function BankSimulationPage() {
   const [loading, setLoading] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'input' | 'result' | 'timeline' | 'dynamic'>('input');
   const [error, setError] = useState<string | null>(null);
+  const [windowCount, setWindowCount] = useState(4);
 
   // 随机模拟配置
   const [bankConfig, setBankConfig] = useState({
-    closeTime: 50, // 模拟客户数量
+    closeTime: 50, // 营业时长（分钟）
     avgServiceTime: 5 // 平均服务时间
   });
 
@@ -145,7 +146,7 @@ export default function BankSimulationPage() {
           body: JSON.stringify({
             action: 'simulate',
             data: {
-              windowCount: 4,
+              windowCount: windowCount,
               customers: testData.testData.customers,
             },
           }),
@@ -166,7 +167,7 @@ export default function BankSimulationPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [windowCount]);
 
   // 运行模拟
   const runSimulation = useCallback(async () => {
@@ -186,7 +187,7 @@ export default function BankSimulationPage() {
         body: JSON.stringify({
           action: 'simulate',
           data: {
-            windowCount: 4,
+            windowCount: windowCount,
             customers: customerData,
           },
         }),
@@ -209,7 +210,7 @@ export default function BankSimulationPage() {
     } finally {
       setLoading(false);
     }
-  }, [customers]);
+  }, [customers, windowCount]);
 
   // 清空数据
   const clearData = useCallback(() => {
@@ -251,7 +252,7 @@ export default function BankSimulationPage() {
         body: JSON.stringify({
           action: 'simulate',
           data: {
-            windowCount: 4, // 固定4个窗口
+            windowCount: windowCount,
             customers: randomCustomers
           }
         })
@@ -272,7 +273,7 @@ export default function BankSimulationPage() {
     } finally {
       setLoading(false);
     }
-  }, [bankConfig]);
+  }, [bankConfig, windowCount]);
 
   return (
     <div className="min-h-screen p-4 md:p-8">
@@ -364,6 +365,23 @@ export default function BankSimulationPage() {
               <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-2">
                 <span className="text-2xl">✏️</span> 手动输入数据
               </h2>
+
+              {/* 窗口数量 */}
+              <div className="flex items-center gap-4 mb-6">
+                <label className="text-sm font-semibold text-gray-700">窗口数量</label>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setWindowCount(w => Math.max(1, w - 1))}
+                    className="w-8 h-8 rounded-lg bg-indigo-100 text-indigo-700 font-bold hover:bg-indigo-200 flex items-center justify-center"
+                  >−</button>
+                  <span className="w-8 text-center font-bold text-lg text-indigo-700">{windowCount}</span>
+                  <button
+                    onClick={() => setWindowCount(w => Math.min(8, w + 1))}
+                    className="w-8 h-8 rounded-lg bg-indigo-100 text-indigo-700 font-bold hover:bg-indigo-200 flex items-center justify-center"
+                  >+</button>
+                </div>
+                <span className="text-xs text-gray-400">（1–8 个，影响所有模拟方式）</span>
+              </div>
 
               {/* 客户数据表格 */}
               <div className="overflow-x-auto mb-4">
@@ -565,7 +583,7 @@ export default function BankSimulationPage() {
                 <div className="bg-white rounded-2xl p-6 border-2 border-indigo-300 shadow">
                   <h3 className="text-lg font-bold text-gray-800 mb-4">客户数量</h3>
                   <label className="block text-sm font-bold text-gray-700 mb-2">
-                    模拟客户数: <span className="text-indigo-600 text-xl">{bankConfig.closeTime}</span> 人
+                    营业时长: <span className="text-indigo-600 text-xl">{bankConfig.closeTime}</span> 分钟
                   </label>
                   <input
                     type="range" min="10" max="200" step="10"
@@ -946,315 +964,6 @@ export default function BankSimulationPage() {
           </div>
         </div>
       </div>
-    </div>
-  );
-}
-
-// 动态队列可视化组件
-interface DynamicQueueVisualizationProps {
-  simulationResult: SimulationResult;
-  isPlaying: boolean;
-  speed: number;
-  currentTime: number;
-  onPlayPause: () => void;
-  onSpeedChange: (speed: number) => void;
-  onTimeChange: (time: number) => void;
-}
-
-function DynamicQueueVisualization({
-  simulationResult,
-  isPlaying,
-  speed,
-  currentTime,
-  onPlayPause,
-  onSpeedChange,
-  onTimeChange,
-}: DynamicQueueVisualizationProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const animationRef = useRef<number | null>(null);
-  const lastTimeRef = useRef<number>(0);
-  const currentTimeRef = useRef<number>(currentTime);
-
-  // 同步 currentTime 到 ref，供动画loop读取
-  useEffect(() => {
-    currentTimeRef.current = currentTime;
-  }, [currentTime]);
-
-  // 动画循环 — 依赖不含 currentTime，避免每帧重建
-  useEffect(() => {
-    if (!isPlaying) {
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-      lastTimeRef.current = 0;
-      return;
-    }
-
-    const totalDuration = simulationResult.statistics.totalSimulationTime;
-
-    const animate = (timestamp: number) => {
-      if (!lastTimeRef.current) {
-        lastTimeRef.current = timestamp;
-      }
-
-      const deltaTime = timestamp - lastTimeRef.current;
-      lastTimeRef.current = timestamp;
-
-      const newTime = currentTimeRef.current + (deltaTime * speed) / 1000;
-
-      if (newTime >= totalDuration) {
-        onTimeChange(totalDuration);
-        onPlayPause();
-        return;
-      }
-
-      onTimeChange(newTime);
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    animationRef.current = requestAnimationFrame(animate);
-
-    return () => {
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [isPlaying, speed, simulationResult.statistics.totalSimulationTime, onPlayPause, onTimeChange]);
-
-  // 绘制可视化
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const width = canvas.width;
-    const height = canvas.height;
-
-    // 清空画布
-    ctx.clearRect(0, 0, width, height);
-
-    // 绘制背景
-    ctx.fillStyle = '#f8fafc';
-    ctx.fillRect(0, 0, width, height);
-
-    // 计算当前时刻的状态
-    const time = currentTime;
-    const windows = simulationResult.windows.map(w => {
-      // 找出当前正在服务的客户
-      const currentCustomer = simulationResult.customers.find(
-        c => c.windowId === w.id && c.startTime <= time && c.endTime > time
-      );
-
-      // 找出在队列中等待的客户
-      const queueCustomers = simulationResult.customers.filter(
-        c => c.windowId === w.id && c.arrivalTime <= time && c.startTime > time
-      ).sort((a, b) => a.arrivalTime - b.arrivalTime);
-
-      return {
-        ...w,
-        currentCustomer: currentCustomer || null,
-        queue: queueCustomers,
-      };
-    });
-
-    // 绘制窗口
-    const windowCount = windows.length;
-    const windowWidth = 90;
-    const windowHeight = 110;
-    const windowSpacing = (width - windowCount * windowWidth) / (windowCount + 1);
-
-    windows.forEach((windowData, index) => {
-      const x = windowSpacing + index * (windowWidth + windowSpacing);
-      const y = height - windowHeight - 40;
-
-      // 绘制窗口框
-      const gradient = ctx.createLinearGradient(x, y, x, y + windowHeight);
-      if (windowData.currentCustomer) {
-        gradient.addColorStop(0, '#6366f1');
-        gradient.addColorStop(1, '#4f46e5');
-      } else {
-        gradient.addColorStop(0, '#94a3b8');
-        gradient.addColorStop(1, '#64748b');
-      }
-      ctx.fillStyle = gradient;
-      ctx.beginPath();
-      ctx.roundRect(x, y, windowWidth, windowHeight, 12);
-      ctx.fill();
-
-      // 绘制窗口标签
-      ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 14px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText(`窗口${windowData.id}`, x + windowWidth / 2, y + 25);
-
-      // 绘制当前客户
-      if (windowData.currentCustomer) {
-        drawCustomer(ctx, x + windowWidth / 2, y + 60, '#10b981');
-        ctx.fillStyle = '#ffffff';
-        ctx.font = '11px sans-serif';
-        ctx.fillText(`客户${windowData.currentCustomer.id}`, x + windowWidth / 2, y + 90);
-      } else {
-        ctx.fillStyle = '#cbd5e1';
-        ctx.font = '12px sans-serif';
-        ctx.fillText('空闲', x + windowWidth / 2, y + 60);
-      }
-
-      // 绘制等待队列（向上垂直延伸）
-      const queueCenterX = x + windowWidth / 2;
-      const queueRadius = 9;
-      const queueSpacing = 20;
-      windowData.queue.slice(0, 8).forEach((customer, queueIndex) => {
-        const queueX = queueCenterX;
-        const queueY = y - 15 - queueIndex * queueSpacing;
-        drawCustomer(ctx, queueX, queueY, '#f59e0b', queueRadius);
-        ctx.fillStyle = '#1e293b';
-        ctx.font = 'bold 8px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText(`${customer.id}`, queueX, queueY + 3);
-      });
-
-      // 显示队列溢出数量
-      if (windowData.queue.length > 8) {
-        const overflowY = y - 15 - 8 * queueSpacing - 8;
-        ctx.fillStyle = '#64748b';
-        ctx.font = 'bold 10px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText(`+${windowData.queue.length - 8}`, queueCenterX, overflowY);
-      }
-    });
-
-    // 绘制时间进度条
-    const progress = simulationResult.statistics.totalSimulationTime > 0
-      ? currentTime / simulationResult.statistics.totalSimulationTime
-      : 0;
-    ctx.fillStyle = '#e2e8f0';
-    ctx.beginPath();
-    ctx.roundRect(20, 15, width - 40, 10, 5);
-    ctx.fill();
-
-    const progressGradient = ctx.createLinearGradient(20, 0, 20 + (width - 40) * progress, 0);
-    progressGradient.addColorStop(0, '#6366f1');
-    progressGradient.addColorStop(1, '#8b5cf6');
-    ctx.fillStyle = progressGradient;
-    ctx.beginPath();
-    ctx.roundRect(20, 15, (width - 40) * progress, 10, 5);
-    ctx.fill();
-
-    // 绘制时间文本
-    const hour = Math.floor((time + 540) / 60);
-    const minute = Math.floor((time + 540) % 60);
-    ctx.fillStyle = '#1e293b';
-    ctx.font = 'bold 14px sans-serif';
-    ctx.textAlign = 'left';
-    ctx.fillText(`时间: ${hour}:${String(minute).padStart(2, '0')}`, 20, 45);
-
-    // 绘制统计信息
-    const activeCustomers = simulationResult.customers.filter(
-      c => c.arrivalTime <= time && c.endTime > time
-    ).length;
-    const completedCustomers = simulationResult.customers.filter(
-      c => c.endTime <= time
-    ).length;
-
-    ctx.textAlign = 'right';
-    ctx.fillText(`在场: ${activeCustomers}人`, width - 20, 45);
-    ctx.fillText(`已完成: ${completedCustomers}人`, width - 20, 65);
-
-  }, [currentTime, simulationResult]);
-
-  // 绘制客户图标
-  const drawCustomer = (ctx: CanvasRenderingContext2D, x: number, y: number, color: string, radius = 14) => {
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.arc(x, y, radius, 0, Math.PI * 2);
-    ctx.fill();
-
-    // 添加高光
-    ctx.fillStyle = 'rgba(255,255,255,0.3)';
-    ctx.beginPath();
-    ctx.arc(x - radius * 0.3, y - radius * 0.3, radius * 0.43, 0, Math.PI * 2);
-    ctx.fill();
-  };
-
-  const totalDuration = simulationResult.statistics.totalSimulationTime;
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between flex-wrap gap-4">
-        <h3 className="text-lg font-semibold text-gray-700">队列动态可视化</h3>
-        <div className="flex items-center gap-4">
-          <label className="text-sm text-gray-600">
-            速度: {speed}x
-          </label>
-          <input
-            type="range"
-            min="0.5"
-            max="5"
-            step="0.5"
-            value={speed}
-            onChange={(e) => onSpeedChange(Number(e.target.value))}
-            className="w-24"
-          />
-          <button
-            onClick={onPlayPause}
-            className="btn-secondary text-sm"
-          >
-            {isPlaying ? '⏸ 暂停' : '▶ 播放'}
-          </button>
-          <button
-            onClick={() => onTimeChange(0)}
-            className="btn-secondary text-sm"
-            disabled={currentTime === 0}
-          >
-            ⏮ 重置
-          </button>
-        </div>
-      </div>
-
-      <canvas
-        ref={canvasRef}
-        width={900}
-        height={500}
-        className="w-full bg-white rounded-2xl border border-gray-200 shadow-inner"
-      />
-
-      <div className="flex justify-center gap-6 text-sm flex-wrap">
-        <div className="flex items-center gap-2">
-          <div className="w-4 h-4 rounded-full bg-emerald-500"></div>
-          <span>服务中</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="w-4 h-4 rounded-full bg-amber-500"></div>
-          <span>等待中</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="w-4 h-4 rounded-full bg-slate-400"></div>
-          <span>空闲窗口</span>
-        </div>
-      </div>
-
-      {/* 统计信息 */}
-      {simulationResult && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
-          <div className="stat-card text-center">
-            <div className="stat-value">{simulationResult.statistics.totalCustomers}</div>
-            <div className="text-gray-700 text-sm mt-1 font-medium">总客户数</div>
-          </div>
-          <div className="stat-card text-center">
-            <div className="text-3xl font-bold text-emerald-600">{formatTime(simulationResult.statistics.avgWaitTime)}</div>
-            <div className="text-gray-700 text-sm mt-1 font-medium">平均等待</div>
-          </div>
-          <div className="stat-card text-center">
-            <div className="text-3xl font-bold text-blue-600">{formatTime(simulationResult.statistics.avgStayTime)}</div>
-            <div className="text-gray-700 text-sm mt-1 font-medium">平均逗留</div>
-          </div>
-          <div className="stat-card text-center">
-            <div className="text-3xl font-bold text-purple-600">{simulationResult.statistics.maxQueueLength}</div>
-            <div className="text-gray-700 text-sm mt-1 font-medium">最大队列</div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

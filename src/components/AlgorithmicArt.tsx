@@ -30,7 +30,6 @@ export interface AlgorithmicArtProps {
   customers: CustomerData[];
 }
 
-const WIN_COUNT = 4;
 const PALETTE: [number, number, number][] = [
   [217, 119, 87],
   [106, 155, 204],
@@ -49,6 +48,7 @@ export default function AlgorithmicArt({ statistics, windows, customers }: Algor
     import('p5').then((mod) => {
       const p5 = mod.default;
       const container = containerRef.current!;
+      const WIN_COUNT = windows.length;
       const W = 900;
       const H = 580;
       const WIN_W = 120;
@@ -91,7 +91,7 @@ export default function AlgorithmicArt({ statistics, windows, customers }: Algor
       customers.forEach((c, idx) => {
         const wi = Math.max(0, Math.min(WIN_COUNT - 1, c.windowId - 1));
         const cx = winCX(wi);
-        const col = PALETTE[wi];
+        const col = PALETTE[wi % PALETTE.length];
         const r = 3 + Math.min(c.serviceTime, 10) * 0.4;
         for (let k = 0; k < 4; k++) {
           const angle = (k / 4) * Math.PI * 2 + Math.random() * 0.5;
@@ -154,7 +154,7 @@ export default function AlgorithmicArt({ statistics, windows, customers }: Algor
               pt.vx = Math.cos(angle) * spd;
               pt.vy = Math.sin(angle) * spd - 1.2;
               pt.alpha = 0.85;
-              pt.col = PALETTE[wi];
+              pt.col = PALETTE[wi % PALETTE.length];
             }
           }
 
@@ -162,7 +162,7 @@ export default function AlgorithmicArt({ statistics, windows, customers }: Algor
           for (let wi = 0; wi < WIN_COUNT; wi++) {
             const cx = winCX(wi);
             const wx = cx - WIN_W / 2;
-            const col = PALETTE[wi];
+            const col = PALETTE[wi % PALETTE.length];
             const util = utilization[wi] ?? 0;
             const glow = util * 30;
 
@@ -249,7 +249,7 @@ export default function AlgorithmicArt({ statistics, windows, customers }: Algor
             const barH = CHART_H * (served / maxServed);
             const bx = BAR_SPACING + wi * (BAR_W + BAR_SPACING);
             const by = CHART_Y + CHART_H - barH;
-            const col = PALETTE[wi];
+            const col = PALETTE[wi % PALETTE.length];
 
             p.drawingContext.save();
             const bg = (p.drawingContext as unknown as CanvasRenderingContext2D).createLinearGradient(bx, by, bx, CHART_Y + CHART_H);
@@ -294,7 +294,7 @@ export default function AlgorithmicArt({ statistics, windows, customers }: Algor
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statistics, windows, customers]);
 
-  const utilization = windows.slice(0, WIN_COUNT).map(w =>
+  const utilization = windows.map(w =>
     Math.min(1, w.totalServiceTime / Math.max(1, statistics.totalSimulationTime))
   );
 
@@ -320,9 +320,9 @@ export default function AlgorithmicArt({ statistics, windows, customers }: Algor
         </div>
         <div style={{ borderTop: '1px solid #2a2a28', paddingTop: 14 }}>
           <div style={{ color: '#b0aea5', fontSize: 11, marginBottom: 10 }}>窗口利用率</div>
-          {windows.slice(0, 4).map((w, i) => {
+          {windows.map((w, i) => {
             const util = utilization[i] ?? 0;
-            const col = PALETTE[i];
+            const col = PALETTE[i % PALETTE.length];
             return (
               <div key={w.id} style={{ marginBottom: 8 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
