@@ -86,6 +86,10 @@ export default function BankSimulationPage() {
     avgServiceTime: 5 // 平均服务时间
   });
 
+  // 算法对比结果
+  const [comparisonResults, setComparisonResults] = useState<{algorithmName: string; result: SimulationResult}[] | null>(null);
+  const [comparisonLoading, setComparisonLoading] = useState(false);
+
   // 动态可视化状态（统一，所有模拟方式共用）
   const [resultIsPlaying, setResultIsPlaying] = useState(false);
   const [resultCurrentTime, setResultCurrentTime] = useState(0);
@@ -155,6 +159,7 @@ export default function BankSimulationPage() {
 
         if (simData.success) {
           setResult(simData.result);
+          setComparisonResults(null);
           setResultCurrentTime(0);
           setResultIsPlaying(false);
           setActiveTab('result');
@@ -197,6 +202,7 @@ export default function BankSimulationPage() {
 
       if (data.success) {
         setResult(data.result);
+        setComparisonResults(null);
         setResultCurrentTime(0);
         setResultIsPlaying(false);
         setValidation(data.validation);
@@ -262,6 +268,7 @@ export default function BankSimulationPage() {
 
       if (data.success) {
         setResult(data.result);
+        setComparisonResults(null);
         setResultCurrentTime(0);
         setResultIsPlaying(false);
         setActiveTab('dynamic');
@@ -274,6 +281,33 @@ export default function BankSimulationPage() {
       setLoading(false);
     }
   }, [bankConfig, windowCount]);
+
+  // 对比三种调度算法
+  const runComparison = useCallback(async () => {
+    if (!result) return;
+    setComparisonLoading(true);
+    try {
+      const customerData = customers.map(c => ({
+        arrivalTime: parseFloat(c.arrivalTime) || 0,
+        serviceTime: parseFloat(c.serviceTime) || 0,
+      }));
+      const response = await fetch('/api/simulation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'compareAlgorithms', data: { windowCount, customers: customerData } }),
+      });
+      const data = await response.json();
+      if (data.success) {
+        setComparisonResults(data.results);
+      } else {
+        setError(data.error || '对比失败');
+      }
+    } catch {
+      setError('对比算法失败');
+    } finally {
+      setComparisonLoading(false);
+    }
+  }, [result, customers, windowCount]);
 
   return (
     <div className="min-h-screen p-4 md:p-8">
@@ -872,7 +906,16 @@ export default function BankSimulationPage() {
                   onTimeChange={setResultCurrentTime}
                 />
                 <div>
-                  <h3 className="text-lg font-semibold text-gray-700 mb-4">算法艺术可视化</h3>
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-semibold text-gray-700">算法艺术可视化 · 等待的代价</h3>
+                    <button
+                      onClick={runComparison}
+                      disabled={comparisonLoading}
+                      className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2"
+                    >
+                      {comparisonLoading ? '对比中…' : '📊 对比三种调度算法'}
+                    </button>
+                  </div>
                   <AlgorithmicArt
                     statistics={{
                       totalCustomers: result.statistics.totalCustomers,
@@ -893,6 +936,7 @@ export default function BankSimulationPage() {
                       windowId: c.windowId,
                       endTime: c.endTime,
                     }))}
+                    comparisonResults={comparisonResults ?? undefined}
                   />
                 </div>
               </div>

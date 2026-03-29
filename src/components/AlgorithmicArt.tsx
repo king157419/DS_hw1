@@ -24,21 +24,40 @@ interface CustomerData {
   endTime: number;
 }
 
+export interface ComparisonEntry {
+  algorithmName: string;
+  result: {
+    customers: CustomerData[];
+    windows: WindowStat[];
+    statistics: SimStats;
+  };
+}
+
 export interface AlgorithmicArtProps {
   statistics: SimStats;
   windows: WindowStat[];
   customers: CustomerData[];
+  comparisonResults?: ComparisonEntry[];
 }
 
-const PALETTE: [number, number, number][] = [
-  [217, 119, 87],
-  [106, 155, 204],
-  [120, 140, 93],
-  [176, 174, 165],
-];
+// Anthropic brand palette
+const C: Record<string, [number,number,number]> = {
+  bg:     [20, 20, 19],
+  blue:   [106, 155, 204],
+  orange: [217, 119, 87],
+  green:  [120, 140, 93],
+  gray:   [176, 174, 165],
+  red:    [220, 60, 60],
+};
 
-export default function AlgorithmicArt({ statistics, windows, customers }: AlgorithmicArtProps) {
+export default function AlgorithmicArt({ statistics, windows, customers, comparisonResults }: AlgorithmicArtProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const isComparison = !!(comparisonResults && comparisonResults.length > 0);
+
+  // Utilization for sidebar
+  const utilization = windows.map(w =>
+    Math.min(1, w.totalServiceTime / Math.max(1, statistics.totalSimulationTime))
+  );
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -48,243 +67,276 @@ export default function AlgorithmicArt({ statistics, windows, customers }: Algor
     import('p5').then((mod) => {
       const p5 = mod.default;
       const container = containerRef.current!;
-      const WIN_COUNT = windows.length;
-      const W = 900;
-      const H = 580;
-      const WIN_W = 120;
-      const WIN_H = 80;
-      const SPACING = (W - WIN_COUNT * WIN_W) / (WIN_COUNT + 1);
-      const WIN_Y = 290;
-      const TITLE_H = 50;
-
-      const winCX = (i: number) => SPACING + i * (WIN_W + SPACING) + WIN_W / 2;
-      const winCY = WIN_Y + WIN_H / 2;
-
-      const utilization = windows.slice(0, WIN_COUNT).map(w =>
-        Math.min(1, w.totalServiceTime / Math.max(1, statistics.totalSimulationTime))
-      );
-
-      const byWindow: CustomerData[][] = Array.from({ length: WIN_COUNT }, () => []);
-      customers.forEach(c => {
-        const wi = Math.max(0, Math.min(WIN_COUNT - 1, c.windowId - 1));
-        byWindow[wi].push(c);
-      });
-
-      function waitColor(waitTime: number): [number, number, number] {
-        const t = Math.min(1, waitTime / 10);
-        return [
-          Math.round(100 + t * 120),
-          Math.round(149 - t * 109),
-          Math.round(237 - t * 177),
-        ];
-      }
-
-      interface Particle {
-        x: number; y: number;
-        vx: number; vy: number;
-        alpha: number;
-        r: number;
-        col: [number, number, number];
-        delay: number;
-      }
-      const particles: Particle[] = [];
-      customers.forEach((c, idx) => {
-        const wi = Math.max(0, Math.min(WIN_COUNT - 1, c.windowId - 1));
-        const cx = winCX(wi);
-        const col = PALETTE[wi % PALETTE.length];
-        const r = 3 + Math.min(c.serviceTime, 10) * 0.4;
-        for (let k = 0; k < 4; k++) {
-          const angle = (k / 4) * Math.PI * 2 + Math.random() * 0.5;
-          const spd = 1.2 + Math.random() * 2;
-          particles.push({
-            x: cx + (Math.random() - 0.5) * 20,
-            y: winCY,
-            vx: Math.cos(angle) * spd,
-            vy: Math.sin(angle) * spd - 1.2,
-            alpha: 0.85,
-            r,
-            col,
-            delay: Math.floor(idx * 1.2) % 180,
-          });
-        }
-      });
-
-      const maxServed = Math.max(1, ...windows.slice(0, WIN_COUNT).map(w => w.totalServed));
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const sketch = (p: any) => {
+        const W = 900;
+        const H = isComparison ? 620 : 540;
+
+        // Wait time → color: Anthropic blue → orange → red
+        function waitCol(wt: number, avgWait: number): [number,number,number] {
+          const t = Math.min(1, wt / Math.max(1, avgWait * 1.5));
+          if (t < 0.5) {
+            const s = t * 2;
+            return [
+              Math.round(C.blue[0] + s * (C.orange[0] - C.blue[0])),
+              Math.round(C.blue[1] + s * (C.orange[1] - C.blue[1])),
+              Math.round(C.blue[2] + s * (C.orange[2] - C.blue[2])),
+            ];
+          }
+          const s = (t - 0.5) * 2;
+          return [
+            Math.round(C.orange[0] + s * (C.red[0] - C.orange[0])),
+            Math.round(C.orange[1] + s * (C.red[1] - C.orange[1])),
+            Math.round(C.orange[2] + s * (C.red[2] - C.orange[2])),
+          ];
+        }
+
+        // Flow field motes
+        interface Mote { x: number; y: number; col: [number,number,number]; }
+        const motes: Mote[] = Array.from({ length: 120 }, () => ({
+          x: p.random(W), y: p.random(H),
+          col: [C.blue[0], C.blue[1], C.blue[2]] as [number,number,number],
+        }));
+
         p.setup = () => {
           p.createCanvas(W, H);
           p.frameRate(60);
+          p.colorMode(p.RGB, 255, 255, 255, 1);
           p.textFont('sans-serif');
+          p.randomSeed(42);
+          p.noiseSeed(42);
         };
 
-        p.draw = () => {
-          p.background(248, 250, 252);
+        // ── single-algorithm draw ──
+        function drawSingle() {
+          const sim = statistics;
+          const wins = windows;
+          const custs = customers;
+          const WIN_COUNT = wins.length || 1;
+          const WIN_NODE_R = 18;
+          const WIN_Y = H - 90;
+          const SPACING = W / (WIN_COUNT + 1);
+          const winX = (i: number) => SPACING * (i + 1);
+          const simTime = sim.totalSimulationTime || 1;
 
-          // ── title bar ──
-          p.noStroke();
-          p.fill(30, 41, 59);
-          p.rect(0, 0, W, TITLE_H);
-          p.fill(255);
-          p.textSize(15); p.textAlign(p.LEFT, p.CENTER);
-          p.text('🏦 银行排队模拟 · 4窗口', 20, TITLE_H / 2);
+          // motion blur
+          p.fill(C.bg[0], C.bg[1], C.bg[2], 22);
+          p.noStroke(); p.rect(0, 0, W, H);
+
+          // aurora bands
+          for (let band = 0; band < 3; band++) {
+            const off = p.noise(band * 10, p.frameCount * 0.003) * 80 - 40;
+            const by = H * 0.3 + band * 80 + off;
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const dctx2 = p.drawingContext as unknown as CanvasRenderingContext2D;
+            dctx2.save();
+            const grd = dctx2.createLinearGradient(0, by - 30, 0, by + 30);
+            const cols = [[30,60,180],[60,20,120],[10,100,120]];
+            const [ar,ag,ab] = cols[band];
+            grd.addColorStop(0, `rgba(${ar},${ag},${ab},0)`);
+            grd.addColorStop(0.5, `rgba(${ar},${ag},${ab},0.04)`);
+            grd.addColorStop(1, `rgba(${ar},${ag},${ab},0)`);
+            dctx2.fillStyle = grd;
+            dctx2.fillRect(0, by - 30, W, 60);
+            dctx2.restore();
+          }
+
+          // flow field motes
+          motes.forEach(m => {
+            const angle = p.noise(m.x * 0.004, m.y * 0.004, p.frameCount * 0.004) * p.TWO_PI * 2;
+            m.x += Math.cos(angle) * 0.5;
+            m.y += Math.sin(angle) * 0.5;
+            if (m.x < 0) m.x = W; if (m.x > W) m.x = 0;
+            if (m.y < 0) m.y = H; if (m.y > H) m.y = 0;
+            p.fill(m.col[0], m.col[1], m.col[2], 0.18);
+            p.noStroke(); p.circle(m.x, m.y, 3);
+          });
+
+          // timeline strip
+          p.fill(15, 18, 32); p.noStroke(); p.rect(0, 0, W, 38);
+          p.fill(C.gray[0], C.gray[1], C.gray[2], 0.5);
+          p.textSize(10); p.textAlign(p.LEFT, p.CENTER);
+          p.text('到达时间线', 10, 19);
+          p.fill(C.gray[0], C.gray[1], C.gray[2], 0.35);
           p.textAlign(p.RIGHT, p.CENTER);
-          p.textSize(13);
-          p.fill(156, 163, 175);
-          p.text(`平均等待: ${statistics.avgWaitTime.toFixed(1)} min  |  总客户: ${statistics.totalCustomers}  |  仿真时长: ${statistics.totalSimulationTime.toFixed(1)} min`, W - 16, TITLE_H / 2);
+          p.text(`0 ─────────────────── ${simTime.toFixed(1)} min`, W - 10, 19);
 
-          // ── particle animation ──
-          for (let i = particles.length - 1; i >= 0; i--) {
-            const pt = particles[i];
-            if (pt.delay > 0) { pt.delay--; continue; }
-            p.noStroke();
-            p.fill(pt.col[0], pt.col[1], pt.col[2], pt.alpha * 255);
-            p.circle(pt.x, pt.y, pt.r * 2);
-            pt.x += pt.vx; pt.y += pt.vy;
-            pt.vy += 0.04;
-            pt.alpha -= 0.008;
-            if (pt.alpha <= 0) {
-              // reset particle
-              const wi = Math.floor(Math.random() * WIN_COUNT);
-              const angle = Math.random() * Math.PI * 2;
-              const spd = 1.2 + Math.random() * 2;
-              pt.x = winCX(wi) + (Math.random() - 0.5) * 20;
-              pt.y = winCY;
-              pt.vx = Math.cos(angle) * spd;
-              pt.vy = Math.sin(angle) * spd - 1.2;
-              pt.alpha = 0.85;
-              pt.col = PALETTE[wi % PALETTE.length];
+          // arrival dots on timeline
+          custs.forEach(c => {
+            const ax = 20 + (c.arrivalTime / simTime) * (W - 40);
+            const [r,g,b] = waitCol(c.waitTime, sim.avgWaitTime);
+            p.fill(r,g,b, 0.85); p.noStroke();
+            p.circle(ax, 19, 6);
+          });
+
+          // bezier arcs: arrival → window node
+          custs.forEach(c => {
+            const ax = 20 + (c.arrivalTime / simTime) * (W - 40);
+            const ay = 19;
+            const wi = c.windowId - 1;
+            const wx = winX(wi);
+            const wy = WIN_Y;
+            const [r,g,b] = waitCol(c.waitTime, sim.avgWaitTime);
+            const sw = Math.min(2.5, 0.5 + c.serviceTime * 0.12);
+            p.stroke(r,g,b, 0.45); p.strokeWeight(sw); p.noFill();
+            p.bezier(ax, ay, ax, wy - 200, wx, wy - 200, wx, wy - WIN_NODE_R - 4);
+          });
+          p.noStroke();
+
+          // window nodes
+          wins.forEach((w, i) => {
+            const wx = winX(i);
+            const wy = WIN_Y;
+            const util = Math.min(1, w.totalServiceTime / Math.max(1, simTime));
+            // nebula halo (additive)
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const dctx3 = p.drawingContext as unknown as CanvasRenderingContext2D;
+            dctx3.save();
+            dctx3.globalCompositeOperation = 'screen';
+            const rBase = 18 + w.totalServed * 0.6;
+            for (let ring = 3; ring >= 1; ring--) {
+              const rr = rBase * ring * 0.9;
+              const grad = dctx3.createRadialGradient(wx, wy, 0, wx, wy, rr);
+              grad.addColorStop(0, `rgba(${C.green[0]},${C.green[1]},${C.green[2]},${0.08 / ring})`);
+              grad.addColorStop(1, 'rgba(0,0,0,0)');
+              dctx3.fillStyle = grad;
+              dctx3.beginPath(); dctx3.arc(wx, wy, rr, 0, Math.PI * 2); dctx3.fill();
             }
-          }
+            dctx3.restore();
+            // utilization sweep arc
+            p.noFill(); p.stroke(C.green[0], C.green[1], C.green[2], 0.7); p.strokeWeight(2);
+            p.arc(wx, wy, WIN_NODE_R * 2 + 10, WIN_NODE_R * 2 + 10, -p.HALF_PI, -p.HALF_PI + util * p.TWO_PI);
+            // breathing pulse ring
+            const pulse = WIN_NODE_R + 6 + 4 * Math.sin(p.frameCount * 0.05 + i * 1.2);
+            p.stroke(C.green[0], C.green[1], C.green[2], 0.25); p.strokeWeight(1);
+            p.circle(wx, wy, pulse * 2);
+            // node core
+            p.noStroke();
+            p.fill(C.green[0], C.green[1], C.green[2]); p.circle(wx, wy, WIN_NODE_R * 2);
+            p.fill(255, 255, 255, 0.2); p.circle(wx - 4, wy - 4, 7);
+            // label
+            p.fill(C.gray[0], C.gray[1], C.gray[2]); p.textSize(10); p.textAlign(p.CENTER, p.TOP);
+            p.text(`窗口${w.id}`, wx, wy + WIN_NODE_R + 4);
+            p.fill(C.orange[0], C.orange[1], C.orange[2]); p.textSize(9);
+            p.text(`${w.totalServed}人 · ${(util*100).toFixed(0)}%`, wx, wy + WIN_NODE_R + 17);
+          });
 
-          // ── windows ──
-          for (let wi = 0; wi < WIN_COUNT; wi++) {
-            const cx = winCX(wi);
-            const wx = cx - WIN_W / 2;
-            const col = PALETTE[wi % PALETTE.length];
-            const util = utilization[wi] ?? 0;
-            const glow = util * 30;
+          // HUD bottom-right
+          const hudX = W - 190; const hudY = H - 80;
+          p.fill(15, 18, 32, 0.85); p.noStroke(); p.rect(hudX, hudY, 180, 68, 8);
+          const hudRows: [string, string, [number,number,number]][] = [
+            ['平均等待', `${sim.avgWaitTime.toFixed(1)} min`, [C.blue[0],C.blue[1],C.blue[2]]],
+            ['最大等待', `${Math.max(...custs.map(c=>c.waitTime), 0).toFixed(1)} min`, [C.red[0],C.red[1],C.red[2]]],
+            ['总客户数', `${sim.totalCustomers}`, [C.gray[0],C.gray[1],C.gray[2]]],
+          ];
+          hudRows.forEach(([label, val, col], idx) => {
+            p.fill(col[0],col[1],col[2]); p.textSize(10); p.textAlign(p.LEFT, p.TOP);
+            p.text(label, hudX + 10, hudY + 10 + idx * 19);
+            p.textAlign(p.RIGHT, p.TOP);
+            p.text(val, hudX + 170, hudY + 10 + idx * 19);
+          });
+        } // end drawSingle
 
-            // glow halo
-            if (glow > 2) {
-              p.noStroke();
-              p.fill(col[0], col[1], col[2], glow);
-              p.rect(wx - 10, WIN_Y - 10, WIN_W + 20, WIN_H + 20, 18);
+        // ── comparison draw ──
+        function drawComparison() {
+          if (!comparisonResults || comparisonResults.length === 0) return;
+          p.background(C.bg[0], C.bg[1], C.bg[2]);
+
+          // dark grid background
+          p.stroke(30, 35, 55, 0.5); p.strokeWeight(1);
+          for (let gx = 0; gx < W; gx += 60) p.line(gx, 0, gx, H);
+          for (let gy = 0; gy < H; gy += 40) p.line(0, gy, W, gy);
+          p.noStroke();
+
+          const N = comparisonResults.length;
+          const panelH = Math.floor((H - 120) / N);
+          const bestAvg = Math.min(...comparisonResults.map(e => e.result.statistics.avgWaitTime));
+
+          comparisonResults.forEach((entry, ei) => {
+            const { algorithmName, result: res } = entry;
+            const panelY = ei * panelH + 10;
+            const simTime = res.statistics.totalSimulationTime || 1;
+            const custs2 = res.customers;
+            const wins2 = res.windows;
+            const WIN_COUNT2 = wins2.length || 1;
+            const SPACING2 = (W - 160) / (WIN_COUNT2 + 1);
+            const winX2 = (i: number) => 80 + SPACING2 * (i + 1);
+            const arcAreaH = panelH - 38;
+            const nodeY = panelY + arcAreaH;
+            const isBest = res.statistics.avgWaitTime <= bestAvg + 0.001;
+
+            // panel separator
+            if (ei > 0) {
+              p.stroke(40, 48, 72, 0.8); p.strokeWeight(1);
+              p.line(0, panelY - 4, W, panelY - 4); p.noStroke();
             }
 
-            // window box gradient via drawingContext
-            p.drawingContext.save();
-            const grad = (p.drawingContext as unknown as CanvasRenderingContext2D).createLinearGradient(wx, WIN_Y, wx, WIN_Y + WIN_H);
-            grad.addColorStop(0, `rgba(${col[0]},${col[1]},${col[2]},1)`);
-            grad.addColorStop(1, `rgba(${Math.max(0,col[0]-40)},${Math.max(0,col[1]-40)},${Math.max(0,col[2]-40)},1)`);
-            (p.drawingContext as unknown as CanvasRenderingContext2D).fillStyle = grad;
-            p.noStroke();
-            p.rect(wx, WIN_Y, WIN_W, WIN_H, 12);
-            p.drawingContext.restore();
+            // algo label
+            const labelCol = isBest ? C.orange : C.gray;
+            p.fill(labelCol[0], labelCol[1], labelCol[2]); p.textSize(11); p.textAlign(p.LEFT, p.CENTER);
+            p.text(algorithmName, 8, panelY + 14);
+            if (isBest) {
+              p.fill(C.orange[0], C.orange[1], C.orange[2], 0.8); p.textSize(9);
+              p.text('★ 最优', 8, panelY + 27);
+            }
+            // avg wait badge
+            const avgW = res.statistics.avgWaitTime;
+            const badgeCol = waitCol(avgW, avgW * 0.5);
+            p.fill(badgeCol[0], badgeCol[1], badgeCol[2], 0.9);
+            p.textSize(12); p.textAlign(p.LEFT, p.CENTER);
+            p.text(`avg ${avgW.toFixed(2)}m`, 8, panelY + arcAreaH / 2);
 
-            // window label
-            p.fill(255); p.noStroke();
-            p.textSize(13); p.textAlign(p.CENTER, p.CENTER);
-            p.text(`窗口 ${wi + 1}`, cx, WIN_Y + 26);
-            p.textSize(11);
-            p.fill(255, 255, 255, 200);
-            p.text(`已服务 ${windows[wi]?.totalServed ?? 0} 人`, cx, WIN_Y + 50);
-
-            // utilization bar inside window
-            p.fill(0, 0, 0, 40);
-            p.noStroke();
-            p.rect(wx + 10, WIN_Y + 62, WIN_W - 20, 8, 4);
-            p.fill(255, 255, 255, 180);
-            p.rect(wx + 10, WIN_Y + 62, (WIN_W - 20) * util, 8, 4);
-          }
-
-          // ── queue dots above each window ──
-          for (let wi = 0; wi < WIN_COUNT; wi++) {
-            const cx = winCX(wi);
-            const queue = byWindow[wi] ?? [];
-            const visible = queue.slice(0, 15);
-            visible.forEach((c, qi) => {
-              const dotY = WIN_Y - 20 - qi * 22;
-              const [r, g, b] = waitColor(c.waitTime);
-              const pulse = 0.85 + 0.15 * Math.sin(p.frameCount * 0.08 + qi * 0.6);
-              p.noStroke();
-              p.fill(r, g, b, pulse * 220);
-              p.circle(cx, dotY, 16);
-              // highlight
-              p.fill(255, 255, 255, 60);
-              p.circle(cx - 3, dotY - 3, 5);
-              // id label
-              p.fill(255);
-              p.textSize(8); p.textAlign(p.CENTER, p.CENTER);
-              p.text(`${c.id}`, cx, dotY);
+            // mini bezier arcs
+            custs2.forEach(c => {
+              const ax = 80 + (c.arrivalTime / simTime) * (W - 160);
+              const ay = panelY + 8;
+              const wi = c.windowId - 1;
+              const wx2 = winX2(wi);
+              const [r,g,b] = waitCol(c.waitTime, res.statistics.avgWaitTime);
+              const sw = Math.min(1.5, 0.3 + c.serviceTime * 0.07);
+              p.stroke(r,g,b, 0.5); p.strokeWeight(sw); p.noFill();
+              p.bezier(ax, ay, ax, nodeY - 50, wx2, nodeY - 50, wx2, nodeY - 10);
             });
-            if (queue.length > 15) {
-              const dotY = WIN_Y - 20 - 15 * 22;
-              p.fill(100, 116, 139); p.textSize(10); p.textAlign(p.CENTER, p.CENTER);
-              p.text(`+${queue.length - 15}`, cx, dotY);
-            }
-            // queue count label
-            p.fill(71, 85, 105); p.textSize(10); p.textAlign(p.CENTER, p.TOP);
-            p.text(`${queue.length}人排队`, cx, WIN_Y + WIN_H + 8);
-          }
-
-          // ── bar chart ──
-          const CHART_Y = WIN_Y + WIN_H + 60;
-          const CHART_H = H - CHART_Y - 40;
-          const BAR_W = 60;
-          const BAR_SPACING = (W - WIN_COUNT * BAR_W) / (WIN_COUNT + 1);
-
-          // axis
-          p.stroke(203, 213, 225); p.strokeWeight(1);
-          p.line(30, CHART_Y, 30, CHART_Y + CHART_H);
-          p.line(30, CHART_Y + CHART_H, W - 20, CHART_Y + CHART_H);
-
-          p.fill(100, 116, 139); p.noStroke();
-          p.textSize(10); p.textAlign(p.CENTER, p.TOP);
-          p.text('各窗口服务人数', W / 2, CHART_Y - 18);
-
-          for (let wi = 0; wi < WIN_COUNT; wi++) {
-            const served = windows[wi]?.totalServed ?? 0;
-            const barH = CHART_H * (served / maxServed);
-            const bx = BAR_SPACING + wi * (BAR_W + BAR_SPACING);
-            const by = CHART_Y + CHART_H - barH;
-            const col = PALETTE[wi % PALETTE.length];
-
-            p.drawingContext.save();
-            const bg = (p.drawingContext as unknown as CanvasRenderingContext2D).createLinearGradient(bx, by, bx, CHART_Y + CHART_H);
-            bg.addColorStop(0, `rgba(${col[0]},${col[1]},${col[2]},0.9)`);
-            bg.addColorStop(1, `rgba(${col[0]},${col[1]},${col[2]},0.4)`);
-            (p.drawingContext as unknown as CanvasRenderingContext2D).fillStyle = bg;
             p.noStroke();
-            p.rect(bx, by, BAR_W, barH, 6, 6, 0, 0);
-            p.drawingContext.restore();
 
-            // value label on top
-            p.fill(30, 41, 59); p.noStroke();
-            p.textSize(11); p.textAlign(p.CENTER, p.BOTTOM);
-            p.text(`${served}`, bx + BAR_W / 2, by - 3);
+            // mini window nodes
+            wins2.forEach((w, i) => {
+              const wx2 = winX2(i);
+              const nr = 7;
+              p.fill(C.green[0], C.green[1], C.green[2]); p.circle(wx2, nodeY, nr * 2);
+              p.fill(C.gray[0], C.gray[1], C.gray[2]); p.textSize(8); p.textAlign(p.CENTER, p.TOP);
+              p.text(`W${w.id}`, wx2, nodeY + nr + 2);
+            });
+          }); // end forEach entry
 
-            // x label
-            p.fill(71, 85, 105); p.textSize(10); p.textAlign(p.CENTER, p.TOP);
-            p.text(`窗口${wi + 1}`, bx + BAR_W / 2, CHART_Y + CHART_H + 5);
-          }
+          // bottom bar chart: avgWaitTime comparison
+          const barY = H - 108;
+          p.fill(15, 18, 32, 0.9); p.noStroke(); p.rect(0, barY, W, 108);
+          p.fill(C.gray[0], C.gray[1], C.gray[2]); p.textSize(10); p.textAlign(p.LEFT, p.CENTER);
+          p.text('平均等待时间对比（越短越优）', 10, barY + 12);
+          const maxAvg = Math.max(...comparisonResults.map(e => e.result.statistics.avgWaitTime), 0.1);
+          const barW = Math.floor((W - 40) / comparisonResults.length) - 16;
+          comparisonResults.forEach((entry, ei) => {
+            const avgW2 = entry.result.statistics.avgWaitTime;
+            const bh = Math.max(4, (avgW2 / maxAvg) * 70);
+            const bx = 20 + ei * (barW + 16);
+            const isBest2 = avgW2 <= bestAvg + 0.001;
+            const [br,bg2,bb] = waitCol(avgW2, maxAvg * 0.5);
+            p.fill(br, bg2, bb, isBest2 ? 0.95 : 0.6);
+            p.rect(bx, barY + 90 - bh, barW, bh, 3);
+            p.fill(isBest2 ? C.orange[0] : C.gray[0], isBest2 ? C.orange[1] : C.gray[1], isBest2 ? C.orange[2] : C.gray[2]);
+            p.textSize(9); p.textAlign(p.CENTER, p.BOTTOM);
+            p.text(`${avgW2.toFixed(2)}m`, bx + barW / 2, barY + 88 - bh);
+            p.textAlign(p.CENTER, p.TOP);
+            p.text(entry.algorithmName.split('（')[0], bx + barW / 2, barY + 92);
+          });
+        } // end drawComparison
 
-          // legend: wait-time color scale
-          const LX = W - 140;
-          const LY = CHART_Y;
-          p.textSize(9); p.textAlign(p.LEFT, p.CENTER); p.fill(100, 116, 139); p.noStroke();
-          p.text('等待时长', LX, LY - 10);
-          for (let k = 0; k < 10; k++) {
-            const [r, g, b] = waitColor(k * 1.1);
-            p.fill(r, g, b); p.noStroke();
-            p.rect(LX + k * 12, LY, 12, 10);
-          }
-          p.fill(100, 116, 139); p.textAlign(p.LEFT, p.TOP);
-          p.text('0 min', LX, LY + 13);
-          p.textAlign(p.RIGHT, p.TOP);
-          p.text('10+ min', LX + 120, LY + 13);
-        }; // end draw
+        p.draw = () => {
+          if (isComparison) drawComparison();
+          else drawSingle();
+        };
       }; // end sketch
 
       p5Instance = new p5(sketch, container);
@@ -292,53 +344,69 @@ export default function AlgorithmicArt({ statistics, windows, customers }: Algor
 
     return () => { p5Instance?.remove(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statistics, windows, customers]);
-
-  const utilization = windows.map(w =>
-    Math.min(1, w.totalServiceTime / Math.max(1, statistics.totalSimulationTime))
-  );
+  }, [statistics, windows, customers, comparisonResults, isComparison]);
 
   return (
     <div style={{ display: 'flex', gap: 0, background: '#141413', borderRadius: 16, overflow: 'hidden' }}>
       {/* sidebar */}
       <div style={{
-        width: 220, background: '#1c1c1b', padding: '24px 16px',
-        display: 'flex', flexDirection: 'column', gap: 18, flexShrink: 0,
+        width: 200, background: '#1c1c1b', padding: '20px 14px',
+        display: 'flex', flexDirection: 'column', gap: 16, flexShrink: 0,
       }}>
-        <div style={{ color: '#d97757', fontWeight: 700, fontSize: 15, letterSpacing: 1 }}>银行排队数据</div>
-        <div style={{ borderTop: '1px solid #2a2a28', paddingTop: 14 }}>
+        <div style={{ color: '#d97757', fontWeight: 700, fontSize: 14, letterSpacing: 1 }}>
+          {isComparison ? '算法对比' : '等待的代价'}
+        </div>
+        <div style={{ borderTop: '1px solid #2a2a28', paddingTop: 12 }}>
           {([
             ['总客户数', statistics.totalCustomers],
             ['平均等待', `${statistics.avgWaitTime.toFixed(1)} min`],
             ['仿真时长', `${statistics.totalSimulationTime.toFixed(1)} min`],
           ] as [string, string | number][]).map(([label, val]) => (
-            <div key={label} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+            <div key={label} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 7 }}>
               <span style={{ color: '#6b6b68', fontSize: 11 }}>{label}</span>
               <span style={{ color: '#faf9f5', fontSize: 11 }}>{val}</span>
             </div>
           ))}
         </div>
-        <div style={{ borderTop: '1px solid #2a2a28', paddingTop: 14 }}>
-          <div style={{ color: '#b0aea5', fontSize: 11, marginBottom: 10 }}>窗口利用率</div>
+        <div style={{ borderTop: '1px solid #2a2a28', paddingTop: 12 }}>
+          <div style={{ color: '#b0aea5', fontSize: 11, marginBottom: 8 }}>窗口利用率</div>
           {windows.map((w, i) => {
             const util = utilization[i] ?? 0;
-            const col = PALETTE[i % PALETTE.length];
             return (
-              <div key={w.id} style={{ marginBottom: 8 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+              <div key={w.id} style={{ marginBottom: 7 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
                   <span style={{ color: '#6b6b68', fontSize: 10 }}>窗口{i + 1}</span>
-                  <span style={{ color: `rgb(${col[0]},${col[1]},${col[2]})`, fontSize: 10 }}>{(util * 100).toFixed(0)}%</span>
+                  <span style={{ color: '#788c5d', fontSize: 10 }}>{(util * 100).toFixed(0)}%</span>
                 </div>
                 <div style={{ height: 4, background: '#2a2a28', borderRadius: 2, overflow: 'hidden' }}>
-                  <div style={{ height: '100%', width: `${util * 100}%`, background: `rgb(${col[0]},${col[1]},${col[2]})`, borderRadius: 2 }} />
+                  <div style={{ height: '100%', width: `${util * 100}%`, background: '#788c5d', borderRadius: 2 }} />
                 </div>
               </div>
             );
           })}
         </div>
+        {isComparison && (
+          <div style={{ borderTop: '1px solid #2a2a28', paddingTop: 12 }}>
+            <div style={{ color: '#b0aea5', fontSize: 11, marginBottom: 8 }}>色彩说明</div>
+            {[['低等待', '#6a9bcc'], ['中等待', '#d97757'], ['高等待', '#dc3c3c']].map(([label, col]) => (
+              <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5 }}>
+                <div style={{ width: 10, height: 10, borderRadius: 2, background: col }} />
+                <span style={{ color: '#6b6b68', fontSize: 10 }}>{label}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
       {/* canvas */}
       <div ref={containerRef} style={{ flex: 1 }} />
     </div>
   );
 }
+
+
+
+
+
+
+
+

@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
   BankSimulation,
+  RoundRobinSimulation,
+  LeastExpectedWaitSimulation,
   RealisticBankSimulation,
   validateInput,
   validateConfig,
@@ -42,6 +44,9 @@ export async function POST(request: NextRequest) {
 
       case 'testData':
         return handleTestData(data);
+
+      case 'compareAlgorithms':
+        return handleCompareAlgorithms(data);
 
       default:
         return NextResponse.json(
@@ -147,6 +152,29 @@ function handleTestData(data: { type: 'valid' | 'invalid_all' | 'invalid_partial
     testData,
     validation
   });
+}
+
+/**
+ * 对比三种调度算法（使用相同输入数据）
+ */
+function handleCompareAlgorithms(data: SimulationInput) {
+  const validation = validateInput(data);
+  if (!validation.isValid) {
+    return NextResponse.json({ error: validation.errors.join('; '), validation }, { status: 400 });
+  }
+
+  const algorithms = [
+    { algorithmName: 'SQF（最短队列优先）', sim: new BankSimulation(data.windowCount) },
+    { algorithmName: 'RR（轮询分配）', sim: new RoundRobinSimulation(data.windowCount) },
+    { algorithmName: 'LEW（最短预期等待）', sim: new LeastExpectedWaitSimulation(data.windowCount) },
+  ];
+
+  const results = algorithms.map(({ algorithmName, sim }) => {
+    data.customers.forEach(c => sim.addCustomer(c.arrivalTime, c.serviceTime));
+    return { algorithmName, result: sim.run() };
+  });
+
+  return NextResponse.json({ success: true, results });
 }
 
 export async function GET() {

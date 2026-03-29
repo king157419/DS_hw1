@@ -92,13 +92,13 @@ export interface ValidationResult {
  * 银行模拟类
  */
 export class BankSimulation {
-  private windows: Window[] = [];
-  private events: Event[] = [];
-  private currentTime: number = 0;
-  private customers: Customer[] = [];
-  private timeline: TimelineEvent[] = [];
-  private maxQueueLength: number = 0;
-  private customerIdCounter: number = 1;
+  protected windows: Window[] = [];
+  protected events: Event[] = [];
+  protected currentTime: number = 0;
+  protected customers: Customer[] = [];
+  protected timeline: TimelineEvent[] = [];
+  protected maxQueueLength: number = 0;
+  protected customerIdCounter: number = 1;
 
   constructor(windowCount: number = 4) {
     // 初始化窗口
@@ -141,80 +141,65 @@ export class BankSimulation {
   /**
    * 获取空闲窗口
    */
-  private getIdleWindow(): Window | null {
+  protected getIdleWindow(): Window | null {
     return this.windows.find(w => w.currentCustomer === null) || null;
   }
 
   /**
-   * 获取最短队列窗口
+   * 获取最短队列窗口（按队列人数）
    */
-  private getShortestQueueWindow(): Window {
-    if (this.windows.length === 0) {
-      throw new Error('没有可用的窗口');
-    }
+  protected getShortestQueueWindow(): Window {
+    if (this.windows.length === 0) throw new Error('没有可用的窗口');
     let shortest = this.windows[0];
-    for (const window of this.windows) {
-      if (window.queue.length < shortest.queue.length) {
-        shortest = window;
-      }
+    for (const w of this.windows) {
+      if (w.queue.length < shortest.queue.length) shortest = w;
     }
     return shortest;
   }
 
   /**
-   * 分配客户到窗口
+   * 直接服务客户（窗口空闲时）
    */
-  private assignCustomerToWindow(customer: Customer): void {
-    // 优先分配空闲窗口
+  protected serveCustomerAt(customer: Customer, window: Window): void {
+    customer.windowId = window.id;
+    customer.startTime = this.currentTime;
+    customer.endTime = this.currentTime + customer.serviceTime;
+    customer.waitTime = 0;
+    customer.status = 'serving';
+    window.currentCustomer = customer;
+    this.events.push({ type: 'departure', time: customer.endTime, customer, windowId: window.id });
+    this.timeline.push({
+      time: this.currentTime, type: 'start_service',
+      customerId: customer.id, windowId: window.id,
+      description: `客户${customer.id}在窗口${window.id}开始办理业务`
+    });
+  }
+
+  /**
+   * 将客户加入等待队列
+   */
+  protected enqueueCustomerAt(customer: Customer, window: Window): void {
+    customer.windowId = window.id;
+    customer.status = 'waiting';
+    window.queue.push(customer);
+    const currentMax = Math.max(...this.windows.map(w => w.queue.length));
+    if (currentMax > this.maxQueueLength) this.maxQueueLength = currentMax;
+    this.timeline.push({
+      time: this.currentTime, type: 'arrival',
+      customerId: customer.id, windowId: window.id,
+      description: `客户${customer.id}加入窗口${window.id}的等待队列`
+    });
+  }
+
+  /**
+   * 分配客户到窗口（SQF策略：空闲优先，否则最短队列）
+   */
+  protected assignCustomerToWindow(customer: Customer): void {
     const idleWindow = this.getIdleWindow();
-    
     if (idleWindow) {
-      // 直接服务
-      customer.windowId = idleWindow.id;
-      customer.startTime = this.currentTime;
-      customer.endTime = this.currentTime + customer.serviceTime;
-      customer.waitTime = 0;
-      customer.status = 'serving';
-      
-      idleWindow.currentCustomer = customer;
-      
-      // 添加离开事件
-      this.events.push({
-        type: 'departure',
-        time: customer.endTime,
-        customer,
-        windowId: idleWindow.id
-      });
-
-      // 记录时间线
-      this.timeline.push({
-        time: this.currentTime,
-        type: 'start_service',
-        customerId: customer.id,
-        windowId: idleWindow.id,
-        description: `客户${customer.id}在窗口${idleWindow.id}开始办理业务`
-      });
+      this.serveCustomerAt(customer, idleWindow);
     } else {
-      // 加入最短队列
-      const shortestWindow = this.getShortestQueueWindow();
-      customer.windowId = shortestWindow.id;
-      customer.status = 'waiting';
-      shortestWindow.queue.push(customer);
-
-      // 更新最大队列长度
-      const currentMaxLength = Math.max(...this.windows.map(w => w.queue.length));
-      if (currentMaxLength > this.maxQueueLength) {
-        this.maxQueueLength = currentMaxLength;
-      }
-
-      // 记录时间线
-      this.timeline.push({
-        time: this.currentTime,
-        type: 'arrival',
-        customerId: customer.id,
-        windowId: shortestWindow.id,
-        description: `客户${customer.id}加入窗口${shortestWindow.id}的等待队列`
-      });
+      this.enqueueCustomerAt(customer, this.getShortestQueueWindow());
     }
   }
 
@@ -1043,4 +1028,54 @@ export function getDefaultConfig(): BankConfig {
     elderlyRatio: 0.6,
     seed: undefined
   };
+}
+
+/**
+ * 轮询调度模拟（Round Robin）
+ * 所有窗口均有客户时，按轮询顺序分配，不考虑队列长度
+ */
+export class RoundRobinSimulation extends BankSimulation {
+  private rrIndex = 0;
+
+  protected override assignCustomerToWindow(customer: Customer): void {
+    const idleWindow = this.getIdleWindow();
+    if (idleWindow) {
+      this.serveCustomerAt(customer, idleWindow);
+    } else {
+      const win = this.windows[this.rrIndex % this.windows.length];
+      this.rrIndex++;
+      this.enqueueCustomerAt(customer, win);
+    }
+  }
+}
+
+/**
+ * 最短预期等待调度（Least Expected Wait）
+ * 选择预期等待时间最短的窗口：当前服务剩余时间 + 队列中所有客户服务时间之和
+ * 理论上优于 SQF，因为考虑了服务时间的差异
+ */
+export class LeastExpectedWaitSimulation extends BankSimulation {
+  private getLEWWindow(): Window {
+    if (this.windows.length === 0) throw new Error('没有可用的窗口');
+    let best = this.windows[0];
+    let bestWait = Infinity;
+    for (const w of this.windows) {
+      const remaining = w.currentCustomer
+        ? Math.max(0, w.currentCustomer.endTime - this.currentTime)
+        : 0;
+      const queueWait = w.queue.reduce((s, c) => s + c.serviceTime, 0);
+      const expectedWait = remaining + queueWait;
+      if (expectedWait < bestWait) { bestWait = expectedWait; best = w; }
+    }
+    return best;
+  }
+
+  protected override assignCustomerToWindow(customer: Customer): void {
+    const idleWindow = this.getIdleWindow();
+    if (idleWindow) {
+      this.serveCustomerAt(customer, idleWindow);
+    } else {
+      this.enqueueCustomerAt(customer, this.getLEWWindow());
+    }
+  }
 }
