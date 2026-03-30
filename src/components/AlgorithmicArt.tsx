@@ -68,6 +68,25 @@ export default function AlgorithmicArt({ statistics, windows, customers, compari
       const p5 = mod.default;
       const container = containerRef.current!;
 
+      // Pure wait-time color (no p5 dependency, used in setup buffer)
+      function waitColStatic(wt: number, avgWait: number): [number,number,number] {
+        const t = Math.min(1, wt / Math.max(1, avgWait * 1.5));
+        if (t < 0.5) {
+          const s = t * 2;
+          return [
+            Math.round(C.blue[0] + s * (C.orange[0] - C.blue[0])),
+            Math.round(C.blue[1] + s * (C.orange[1] - C.blue[1])),
+            Math.round(C.blue[2] + s * (C.orange[2] - C.blue[2])),
+          ];
+        }
+        const s2 = (t - 0.5) * 2;
+        return [
+          Math.round(C.orange[0] + s2 * (C.red[0] - C.orange[0])),
+          Math.round(C.orange[1] + s2 * (C.red[1] - C.orange[1])),
+          Math.round(C.orange[2] + s2 * (C.red[2] - C.orange[2])),
+        ];
+      }
+
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const sketch = (p: any) => {
         const W = 900;
@@ -94,18 +113,71 @@ export default function AlgorithmicArt({ statistics, windows, customers, compari
 
         // Flow field motes
         interface Mote { x: number; y: number; col: [number,number,number]; }
-        const motes: Mote[] = Array.from({ length: 120 }, () => ({
+        const motes: Mote[] = Array.from({ length: 60 }, () => ({
           x: p.random(W), y: p.random(H),
           col: [C.blue[0], C.blue[1], C.blue[2]] as [number,number,number],
         }));
 
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let arcBuffer: any = null;
+
         p.setup = () => {
           p.createCanvas(W, H);
-          p.frameRate(60);
+          p.frameRate(24);
           p.colorMode(p.RGB, 255, 255, 255, 1);
           p.textFont('sans-serif');
           p.randomSeed(42);
           p.noiseSeed(42);
+
+          // Pre-render static arcs into offscreen buffer
+          arcBuffer = p.createGraphics(W, H);
+          arcBuffer.clear();
+          arcBuffer.colorMode(arcBuffer.RGB, 255, 255, 255, 1);
+
+          if (!isComparison) {
+            // single mode: arrival dots + bezier arcs
+            const WIN_COUNT_s = windows.length || 1;
+            const WIN_NODE_R_s = 18;
+            const WIN_Y_s = H - 90;
+            const SPACING_s = W / (WIN_COUNT_s + 1);
+            const winX_s = (i: number) => SPACING_s * (i + 1);
+            const simTime_s = statistics.totalSimulationTime || 1;
+            // timeline strip
+            arcBuffer.fill(15, 18, 32); arcBuffer.noStroke(); arcBuffer.rect(0, 0, W, 38);
+            customers.forEach(c => {
+              const ax = 20 + (c.arrivalTime / simTime_s) * (W - 40);
+              const [r2,g2,b2] = waitColStatic(c.waitTime, statistics.avgWaitTime);
+              arcBuffer.fill(r2,g2,b2, 0.85); arcBuffer.noStroke();
+              arcBuffer.circle(ax, 19, 6);
+              const wi = c.windowId - 1;
+              const wx_s = winX_s(wi);
+              const sw = Math.min(2.5, 0.5 + c.serviceTime * 0.12);
+              arcBuffer.stroke(r2,g2,b2, 0.45); arcBuffer.strokeWeight(sw); arcBuffer.noFill();
+              arcBuffer.bezier(ax, 19, ax, WIN_Y_s - 200, wx_s, WIN_Y_s - 200, wx_s, WIN_Y_s - WIN_NODE_R_s - 4);
+            });
+          } else if (comparisonResults) {
+            // comparison mode: arcs for each panel
+            const N2 = comparisonResults.length;
+            const panelH2 = Math.floor((H - 120) / N2);
+            comparisonResults.forEach((entry, ei) => {
+              const { result: res2 } = entry;
+              const simTime2 = res2.statistics.totalSimulationTime || 1;
+              const wins2 = res2.windows;
+              const WIN_COUNT2 = wins2.length || 1;
+              const SPACING2 = (W - 160) / (WIN_COUNT2 + 1);
+              const winX2 = (i: number) => 80 + SPACING2 * (i + 1);
+              const panelY2 = ei * panelH2 + 10;
+              const arcAreaH2 = panelH2 - 38;
+              const nodeY2 = panelY2 + arcAreaH2;
+              res2.customers.forEach(c => {
+                const ax2 = 80 + (c.arrivalTime / simTime2) * (W - 160);
+                const [r3,g3,b3] = waitColStatic(c.waitTime, res2.statistics.avgWaitTime);
+                const sw2 = Math.min(1.5, 0.3 + c.serviceTime * 0.07);
+                arcBuffer.stroke(r3,g3,b3, 0.5); arcBuffer.strokeWeight(sw2); arcBuffer.noFill();
+                arcBuffer.bezier(ax2, panelY2 + 8, ax2, nodeY2 - 50, winX2(c.windowId-1), nodeY2 - 50, winX2(c.windowId-1), nodeY2 - 10);
+              });
+            });
+          }
         };
 
         // ── single-algorithm draw ──
@@ -153,35 +225,15 @@ export default function AlgorithmicArt({ statistics, windows, customers, compari
             p.noStroke(); p.circle(m.x, m.y, 3);
           });
 
-          // timeline strip
-          p.fill(15, 18, 32); p.noStroke(); p.rect(0, 0, W, 38);
+          // blit pre-rendered arcs + timeline strip
+          if (arcBuffer) p.image(arcBuffer, 0, 0);
+          // timeline labels (dynamic: simTime)
           p.fill(C.gray[0], C.gray[1], C.gray[2], 0.5);
           p.textSize(10); p.textAlign(p.LEFT, p.CENTER);
           p.text('到达时间线', 10, 19);
           p.fill(C.gray[0], C.gray[1], C.gray[2], 0.35);
           p.textAlign(p.RIGHT, p.CENTER);
-          p.text(`0 ─────────────────── ${simTime.toFixed(1)} min`, W - 10, 19);
-
-          // arrival dots on timeline
-          custs.forEach(c => {
-            const ax = 20 + (c.arrivalTime / simTime) * (W - 40);
-            const [r,g,b] = waitCol(c.waitTime, sim.avgWaitTime);
-            p.fill(r,g,b, 0.85); p.noStroke();
-            p.circle(ax, 19, 6);
-          });
-
-          // bezier arcs: arrival → window node
-          custs.forEach(c => {
-            const ax = 20 + (c.arrivalTime / simTime) * (W - 40);
-            const ay = 19;
-            const wi = c.windowId - 1;
-            const wx = winX(wi);
-            const wy = WIN_Y;
-            const [r,g,b] = waitCol(c.waitTime, sim.avgWaitTime);
-            const sw = Math.min(2.5, 0.5 + c.serviceTime * 0.12);
-            p.stroke(r,g,b, 0.45); p.strokeWeight(sw); p.noFill();
-            p.bezier(ax, ay, ax, wy - 200, wx, wy - 200, wx, wy - WIN_NODE_R - 4);
-          });
+          p.text(`0 ──── ${simTime.toFixed(1)} min`, W - 10, 19);
           p.noStroke();
 
           // window nodes
@@ -243,7 +295,10 @@ export default function AlgorithmicArt({ statistics, windows, customers, compari
           if (!comparisonResults || comparisonResults.length === 0) return;
           p.background(C.bg[0], C.bg[1], C.bg[2]);
 
-          // dark grid background
+          // blit pre-rendered arcs
+          if (arcBuffer) p.image(arcBuffer, 0, 0);
+
+          // dark grid overlay (drawn once — no loops needed since arcBuffer has no grid)
           p.stroke(30, 35, 55, 0.5); p.strokeWeight(1);
           for (let gx = 0; gx < W; gx += 60) p.line(gx, 0, gx, H);
           for (let gy = 0; gy < H; gy += 40) p.line(0, gy, W, gy);
@@ -287,17 +342,7 @@ export default function AlgorithmicArt({ statistics, windows, customers, compari
             p.textSize(12); p.textAlign(p.LEFT, p.CENTER);
             p.text(`avg ${avgW.toFixed(2)}m`, 8, panelY + arcAreaH / 2);
 
-            // mini bezier arcs
-            custs2.forEach(c => {
-              const ax = 80 + (c.arrivalTime / simTime) * (W - 160);
-              const ay = panelY + 8;
-              const wi = c.windowId - 1;
-              const wx2 = winX2(wi);
-              const [r,g,b] = waitCol(c.waitTime, res.statistics.avgWaitTime);
-              const sw = Math.min(1.5, 0.3 + c.serviceTime * 0.07);
-              p.stroke(r,g,b, 0.5); p.strokeWeight(sw); p.noFill();
-              p.bezier(ax, ay, ax, nodeY - 50, wx2, nodeY - 50, wx2, nodeY - 10);
-            });
+            // arcs from pre-rendered buffer (blit once at start of comparison draw)
             p.noStroke();
 
             // mini window nodes

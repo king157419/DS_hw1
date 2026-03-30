@@ -134,11 +134,35 @@ export default function P5QueueVisualization({
           return [b0 * x0 + b1 * x1 + b2 * x2 + b3 * x3, b0 * y0 + b1 * y1 + b2 * y2 + b3 * y3];
         }
 
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let bgBuffer: any = null;
+
         p.setup = () => {
           p.createCanvas(W, H);
-          p.frameRate(60);
+          p.frameRate(24);
           p.colorMode(p.RGB, 255, 255, 255, 1);
           p.textFont('sans-serif');
+
+          // Pre-render static background into offscreen buffer
+          bgBuffer = p.createGraphics(W, H);
+          bgBuffer.background(18, 22, 36);
+          // marble floor tiles
+          bgBuffer.noStroke();
+          for (let row = 0; row < 4; row++) {
+            for (let col2 = 0; col2 < 6; col2++) {
+              const tx2 = col2 * 150;
+              const ty2 = WIN_Y + WIN_H + 10 + row * 30;
+              const shade = 28 + (row + col2) % 2 * 6;
+              bgBuffer.fill(shade, shade + 2, shade + 8, 0.8);
+              bgBuffer.rect(tx2, ty2, 149, 29);
+            }
+          }
+          // grid lines
+          bgBuffer.stroke(40, 48, 72, 0.4);
+          bgBuffer.strokeWeight(1);
+          for (let gx = 0; gx < W; gx += 80) bgBuffer.line(gx, 0, gx, WIN_Y);
+          for (let gy = 40; gy < WIN_Y; gy += 60) bgBuffer.line(0, gy, W, gy);
+          bgBuffer.noStroke();
         };
 
         p.draw = () => {
@@ -216,27 +240,8 @@ export default function P5QueueVisualization({
             }
           });
 
-          // --- BACKGROUND: dark hall ---
-          p.background(18, 22, 36);
-
-          // marble floor tiles
-          p.noStroke();
-          for (let row = 0; row < 4; row++) {
-            for (let col2 = 0; col2 < 6; col2++) {
-              const tx2 = col2 * 150;
-              const ty2 = WIN_Y + WIN_H + 10 + row * 30;
-              const shade = 28 + (row + col2) % 2 * 6;
-              p.fill(shade, shade + 2, shade + 8, 0.8);
-              p.rect(tx2, ty2, 149, 29);
-            }
-          }
-
-          // subtle grid lines on upper area
-          p.stroke(40, 48, 72, 0.4);
-          p.strokeWeight(1);
-          for (let gx = 0; gx < W; gx += 80) p.line(gx, 0, gx, WIN_Y);
-          for (let gy = 40; gy < WIN_Y; gy += 60) p.line(0, gy, W, gy);
-          p.noStroke();
+          // --- BACKGROUND: blit pre-rendered buffer ---
+          p.image(bgBuffer, 0, 0);
 
           // --- TITLE BAR ---
           p.fill(24, 30, 52);
