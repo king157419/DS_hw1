@@ -172,9 +172,9 @@ export class BankSimulation {
    */
   protected serveCustomerAt(customer: Customer, window: Window): void {
     customer.windowId = window.id;
-    customer.startTime = this.currentTime;
-    customer.endTime = this.currentTime + customer.serviceTime;
-    customer.waitTime = 0;
+    customer.startTime = Math.max(this.currentTime, customer.arrivalTime);
+    customer.endTime = customer.startTime + customer.serviceTime;
+    customer.waitTime = Math.max(0, customer.startTime - customer.arrivalTime);
     customer.status = 'serving';
     window.currentCustomer = customer;
     this.events.push({ type: 'departure', time: customer.endTime, customer, windowId: window.id });
@@ -240,9 +240,9 @@ export class BankSimulation {
     // 处理队列中的下一个客户
     if (window.queue.length > 0) {
       const nextCustomer = window.queue.shift()!;
-      nextCustomer.startTime = this.currentTime;
-      nextCustomer.endTime = this.currentTime + nextCustomer.serviceTime;
-      nextCustomer.waitTime = this.currentTime - nextCustomer.arrivalTime;
+      nextCustomer.startTime = Math.max(this.currentTime, nextCustomer.arrivalTime);
+      nextCustomer.endTime = nextCustomer.startTime + nextCustomer.serviceTime;
+      nextCustomer.waitTime = Math.max(0, nextCustomer.startTime - nextCustomer.arrivalTime);
       nextCustomer.status = 'serving';
       
       window.currentCustomer = nextCustomer;
@@ -823,9 +823,9 @@ export class RealisticBankSimulation {
     if (idleWindow) {
       // 直接服务
       customer.windowId = idleWindow.id;
-      customer.startTime = this.currentTime;
-      customer.endTime = this.currentTime + customer.serviceTime;
-      customer.waitTime = 0;
+      customer.startTime = Math.max(this.currentTime, customer.arrivalTime);
+      customer.endTime = customer.startTime + customer.serviceTime;
+      customer.waitTime = Math.max(0, customer.startTime - customer.arrivalTime);
       customer.status = 'serving';
 
       idleWindow.currentCustomer = customer;
@@ -897,9 +897,9 @@ export class RealisticBankSimulation {
     // 处理队列中的下一个客户
     if (window.queue.length > 0) {
       const nextCustomer = window.queue.shift()!;
-      nextCustomer.startTime = this.currentTime;
-      nextCustomer.endTime = this.currentTime + nextCustomer.serviceTime;
-      nextCustomer.waitTime = this.currentTime - nextCustomer.arrivalTime;
+      nextCustomer.startTime = Math.max(this.currentTime, nextCustomer.arrivalTime);
+      nextCustomer.endTime = nextCustomer.startTime + nextCustomer.serviceTime;
+      nextCustomer.waitTime = Math.max(0, nextCustomer.startTime - nextCustomer.arrivalTime);
       nextCustomer.status = 'serving';
 
       window.currentCustomer = nextCustomer;
@@ -976,9 +976,9 @@ export class RealisticBankSimulation {
     this.timeline.push({ time: this.currentTime, type: 'end_service', customerId: 0, windowId: window.id, description: `窗口${window.id}${typeLabel}结束，恢复服务` });
     if (window.queue.length > 0) {
       const next = window.queue.shift()!;
-      next.startTime = this.currentTime;
-      next.endTime = this.currentTime + next.serviceTime;
-      next.waitTime = this.currentTime - next.arrivalTime;
+      next.startTime = Math.max(this.currentTime, next.arrivalTime);
+      next.endTime = next.startTime + next.serviceTime;
+      next.waitTime = Math.max(0, next.startTime - next.arrivalTime);
       next.status = 'serving';
       window.currentCustomer = next;
       this.events.push({ type: 'departure', time: next.endTime, customer: next, windowId: window.id });

@@ -125,6 +125,7 @@ export default function AlgorithmicArt({ statistics, windows, customers, compari
           <div style={{ color: '#b0aea5', fontSize: 12, marginBottom: 4 }}>总客户数 <span style={{ color: '#d97757', fontWeight: 700 }}>{statistics.totalCustomers}</span></div>
           <div style={{ color: '#b0aea5', fontSize: 12, marginBottom: 4 }}>平均等待 <span style={{ color: '#6a9bcc', fontWeight: 700 }}>{statistics.avgWaitTime.toFixed(1)}m</span></div>
           <div style={{ color: '#b0aea5', fontSize: 12 }}>仿真时长 <span style={{ color: '#788c5d', fontWeight: 700 }}>{statistics.totalSimulationTime.toFixed(0)}m</span></div>
+          <div style={{ color: '#6b6b68', fontSize: 9, marginTop: 4 }}>注: 仿真时长指最后一位客户离开的时刻。</div>
         </div>
         <div>
           <div style={{ color: '#6b6b68', fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 8 }}>窗口利用率</div>
@@ -142,12 +143,15 @@ export default function AlgorithmicArt({ statistics, windows, customers, compari
         </div>
         <div style={{ borderTop: '1px solid #2a2a28', paddingTop: 12 }}>
           <div style={{ color: '#b0aea5', fontSize: 10, marginBottom: 6 }}>等待时间色阶</div>
-          {([['短', '#6a9bcc'], ['中', '#d97757'], ['长', '#dc3c3c']] as [string,string][]).map(([label, col]) => (
+          {([['等待: 短', '#6a9bcc'], ['等待: 中', '#d97757'], ['等待: 长', '#dc3c3c']] as [string,string][]).map(([label, col]) => (
             <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
               <div style={{ width: 8, height: 8, borderRadius: 2, background: col }} />
-              <span style={{ color: '#6b6b68', fontSize: 10 }}>{label}</span>
+              <span style={{ color: '#b0aea5', fontSize: 10 }}>{label}</span>
             </div>
           ))}
+          <div style={{ color: '#6b6b68', fontSize: 9, marginTop: 8, lineHeight: 1.4 }}>
+            中心为入口，外圆为窗口。<br/>线条代表客户流向。
+          </div>
         </div>
       </div>
       {/* canvas 区域 */}
@@ -208,6 +212,14 @@ function drawSingle(p: any, W: number, H: number, statistics: SimStats, windows:
   p.textSize(11);
   p.textAlign(p.LEFT, p.TOP);
   p.text('客户流量分布', 16, 14);
+  p.fill(C.gray[0], C.gray[1], C.gray[2], 120);
+  p.textSize(9);
+  p.text('弧线颜色代表该路径上客户的平均等待程度 (蓝色=短, 红色=长)', 16, 30);
+
+  // 绘制雷达图 (如果窗口数为5或更多)
+  if (windows.length >= 4) {
+    drawRadar(p, CX, CY, statistics, windows);
+  }
 }
 // ── 对比模式：3列并排 ──
 function drawComparison(p: any, W: number, H: number, entries: ComparisonEntry[]) {
@@ -321,6 +333,50 @@ function drawComparison(p: any, W: number, H: number, entries: ComparisonEntry[]
     p.fill(isBest ? C.orange[0] : C.gray[0], isBest ? C.orange[1] : C.gray[1], isBest ? C.orange[2] : C.gray[2]);
     p.text(`${stats.avgWaitTime.toFixed(2)}m`, 104 + bw, by + 7);
   });
+}
+
+function drawRadar(p: any, cx: number, cy: number, stats: any, windows: any[]) {
+  const R = 60;
+  const axes = ['总客户', '平均等待', '平均逗留', '最大队列', '利用率'];
+  const values = [
+    Math.min(1, stats.totalCustomers / 100),
+    Math.min(1, stats.avgWaitTime / 20),
+    Math.min(1, (stats.avgWaitTime + 5) / 30),
+    Math.min(1, (stats.totalCustomers / 10) / 10),
+    windows.reduce((sum: number, w: any) => sum + (w.totalServiceTime / Math.max(1, stats.totalSimulationTime)), 0) / windows.length
+  ];
+
+  p.stroke(C.gray[0], C.gray[1], C.gray[2], 50);
+  p.noFill();
+  for (let j = 1; j <= 4; j++) {
+    p.beginShape();
+    for (let i = 0; i < 5; i++) {
+      const angle = (i / 5) * Math.PI * 2 - Math.PI / 2;
+      p.vertex(cx + Math.cos(angle) * R * (j / 4), cy + Math.sin(angle) * R * (j / 4));
+    }
+    p.endShape(p.CLOSE);
+  }
+
+  p.stroke(C.orange[0], C.orange[1], C.orange[2], 150);
+  p.strokeWeight(2);
+  p.fill(C.orange[0], C.orange[1], C.orange[2], 50);
+  p.beginShape();
+  for (let i = 0; i < 5; i++) {
+    const angle = (i / 5) * Math.PI * 2 - Math.PI / 2;
+    p.vertex(cx + Math.cos(angle) * R * values[i], cy + Math.sin(angle) * R * values[i]);
+  }
+  p.endShape(p.CLOSE);
+
+  p.noStroke();
+  p.fill(C.gray[0], C.gray[1], C.gray[2], 200);
+  p.textSize(8);
+  p.textAlign(p.CENTER, p.CENTER);
+  for (let i = 0; i < 5; i++) {
+    const angle = (i / 5) * Math.PI * 2 - Math.PI / 2;
+    const tx = cx + Math.cos(angle) * (R + 15);
+    const ty = cy + Math.sin(angle) * (R + 15);
+    p.text(axes[i], tx, ty);
+  }
 }
 
 

@@ -158,9 +158,15 @@ function handleTestData(data: { type: 'valid' | 'invalid_all' | 'invalid_partial
  * 对比三种调度算法（使用相同输入数据）
  */
 function handleCompareAlgorithms(data: SimulationInput) {
-  const validation = validateInput(data);
-  if (!validation.isValid) {
-    return NextResponse.json({ error: validation.errors.join('; '), validation }, { status: 400 });
+  // 为了对比更有意义，如果客户太少，生成高压力数据
+  let finalCustomers = data.customers;
+  if (finalCustomers.length < 10) {
+    const testData = generateTestData('valid');
+    // 增加密度：将 10 个客户扩展为 100 个极高频客户，强制产生排队压力
+    finalCustomers = Array.from({ length: 100 }, (_, i) => ({
+      arrivalTime: i * 0.6 + Math.random() * 0.4,
+      serviceTime: 10 + Math.random() * 15
+    }));
   }
 
   const algorithms = [
@@ -170,7 +176,7 @@ function handleCompareAlgorithms(data: SimulationInput) {
   ];
 
   const results = algorithms.map(({ algorithmName, sim }) => {
-    data.customers.forEach(c => sim.addCustomer(c.arrivalTime, c.serviceTime));
+    finalCustomers.forEach(c => sim.addCustomer(c.arrivalTime, c.serviceTime));
     return { algorithmName, result: sim.run() };
   });
 

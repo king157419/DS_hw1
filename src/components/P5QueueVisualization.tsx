@@ -92,14 +92,19 @@ export default function P5QueueVisualization({
   useEffect(() => { onTimeChangeRef.current = onTimeChange; }, [onTimeChange]);
   useEffect(() => { onPlayPauseRef.current = onPlayPause; }, [onPlayPause]);
 
+  // 处理 Reset (currentTime = 0)
+  useEffect(() => {
+    if (currentTime === 0) {
+      currentTimeRef.current = 0;
+    }
+  }, [currentTime]);
+
   useEffect(() => {
     if (!containerRef.current) return;
     let mounted = true;
 
-    if (p5Ref.current) {
-      p5Ref.current.remove();
-      p5Ref.current = null;
-    }
+    // 核心优化：确保实例仅在挂载时创建一次
+    if (p5Ref.current) return;
 
     import('p5').then((mod) => {
       if (!mounted || !containerRef.current) return;
@@ -110,15 +115,18 @@ export default function P5QueueVisualization({
       const sketch = (p: any) => {
         const W = 900;
         const H = 560;
+        let lastStateSync = 0;
+        let lastInternalTime = -1;
 
         // Layout computed from window count
-        const WIN_COUNT = simRef.current.windows.length || 4;
-        const WIN_W = Math.min(130, Math.floor((W - 80) / WIN_COUNT) - 20);
+        let WIN_COUNT = simRef.current.windows.length || 4;
+        let WIN_W = Math.min(130, Math.floor((W - 80) / WIN_COUNT) - 20);
         const WIN_H = 130;
-        const SPACING = (W - WIN_COUNT * WIN_W) / (WIN_COUNT + 1);
-        const WIN_Y = H - WIN_H - 60;
-        const ENTRANCE_X = W / 2;
-        const ENTRANCE_Y = H - 20;
+        let SPACING = (W - WIN_COUNT * WIN_W) / (WIN_COUNT + 1);
+        const WIN_Y = 120;
+        const ENTRANCE_X = W * 0.3; // 左侧入口
+        const EXIT_X = W * 0.7;     // 右侧出口
+        const ENTRANCE_Y = H - 45;
 
         const particles: Particle[] = [];
         const pulses: PulseRing[] = [];
@@ -186,6 +194,15 @@ export default function P5QueueVisualization({
         };
 
         p.draw = () => {
+          // --- detect layout change ---
+          const currentWinCount = simRef.current.windows.length;
+          if (currentWinCount !== WIN_COUNT) {
+            WIN_COUNT = currentWinCount;
+            WIN_W = Math.min(130, Math.floor((W - 80) / WIN_COUNT) - 20);
+            SPACING = (W - WIN_COUNT * WIN_W) / (WIN_COUNT + 1);
+            initBg();
+          }
+
           // --- advance sim time ---
           if (isPlayingRef.current) {
             const now = performance.now();
@@ -194,32 +211,49 @@ export default function P5QueueVisualization({
             lastRealTimeRef.current = now;
             const total = simRef.current.statistics.totalSimulationTime;
             const next = currentTimeRef.current + (delta * speedRef.current) / 1000;
-            if (next >= total) {
-              currentTimeRef.current = total;
-              onTimeChangeRef.current(total);
-              onPlayPauseRef.current();
-            } else {
-              currentTimeRef.current = next;
-              onTimeChangeRef.current(next);
+
+            currentTimeRef.current = Math.min(next, total);
+
+            // 优化：降低 React 同步频率，每 200ms 或结束时同步一次
+            if (next >= total || now - lastStateSync > 200) {
+              onTimeChangeRef.current(currentTimeRef.current);
+              lastStateSync = now;
+              if (next >= total) onPlayPauseRef.current();
             }
           } else {
             lastRealTimeRef.current = 0;
           }
 
           const t = currentTimeRef.current;
+
+          // 核心优化：如果进度被大幅重置（回退），清空所有内部 Set 和动画对象
+          // 增加阈值到 1.0 以防止 React 状态滞后导致的微小抖动误触发重置
+          if (t < lastInternalTime - 1.0) {
+            seenArrived.clear();
+            seenCompleted.clear();
+            seenServiceStart.clear();
+            seenLeaving.clear();
+            flyingDots.length = 0;
+            leavingDots.length = 0;
+            particles.length = 0;
+          }
+          lastInternalTime = t;
+
           const sim = simRef.current;
           const total = sim.statistics.totalSimulationTime;
+
+          p.background(18, 22, 36); // 显式清理背景
 
           // --- detect events ---
           sim.customers.forEach(c => {
             if (c.arrivalTime <= t && !seenArrived.has(c.id)) {
               seenArrived.add(c.id);
               const wi = c.windowId - 1;
-              const tx = winX(wi);
-              const ty = winTop() - 20;
+              const tx = winX(wi) - WIN_W * 0.25; // 飞向窗口左侧排队区
+              const ty = WIN_Y + WIN_H + 35;
               // control points for S-curve bezier
-              const cx1 = ENTRANCE_X + (tx - ENTRANCE_X) * 0.2;
-              const cy1 = ENTRANCE_Y - 120;
+              const cx1 = ENTRANCE_X + (tx - ENTRANCE_X) * 0.1;
+              const cy1 = ENTRANCE_Y - 150;
               flyingDots.push({
                 id: c.id, x: ENTRANCE_X, y: ENTRANCE_Y,
                 tx, ty, cx1, cy1,
@@ -264,18 +298,17 @@ export default function P5QueueVisualization({
             // 离开动画：从窗口飞向出口
             if (c.endTime <= t && !seenLeaving.has(c.id)) {
               seenLeaving.add(c.id);
-              const wx2 = winX(c.windowId - 1);
-              const wy2 = WIN_Y + WIN_H - 10;
-              const ex = ENTRANCE_X + p.random(-40, 40);
+              const wi = c.windowId - 1;
+              const lx = winX(wi) + WIN_W * 0.25; // 从窗口右侧离开
+              const ly = WIN_Y + WIN_H - 10;
+              const ex = EXIT_X + p.random(-20, 20); // 向右侧出口汇聚
               const ey = ENTRANCE_Y;
               leavingDots.push({
                 id: c.id,
-                x: wx2, y: wy2,
+                x: lx, y: ly,
                 tx: ex, ty: ey,
-                cx1: wx2 + (ex - wx2) * 0.3,
-                cy1: wy2 + 60,
-                cx2: ex - (ex - wx2) * 0.2,
-                cy2: ey - 40,
+                cx1: lx + 50, cy1: ly + 80, // 向右甩出的弧度
+                cx2: ex, cy2: ey - 80,
                 progress: 0,
                 trail: [],
               });
@@ -284,6 +317,15 @@ export default function P5QueueVisualization({
 
           // --- BACKGROUND: blit pre-rendered buffer ---
           p.image(bgBuffer, 0, 0);
+
+          // 绘制门口标签
+          p.noStroke();
+          p.fill(34, 197, 94, 0.6); p.rect(ENTRANCE_X - 40, ENTRANCE_Y + 10, 80, 22, 6);
+          p.fill(255); p.textSize(10); p.textAlign(p.CENTER, p.CENTER);
+          p.text("入 口", ENTRANCE_X, ENTRANCE_Y + 21);
+
+          p.fill(251, 191, 36, 0.6); p.rect(EXIT_X - 40, ENTRANCE_Y + 10, 80, 22, 6);
+          p.fill(255); p.text("出 口", EXIT_X, ENTRANCE_Y + 21);
 
           // --- TITLE BAR ---
           p.fill(24, 30, 52);
@@ -445,6 +487,7 @@ export default function P5QueueVisualization({
               p.fill(255, 255, 255, 0.4); p.circle(cx - 5, wy + 65, 8);
               p.fill(255); p.textSize(9); p.textAlign(p.CENTER, p.CENTER);
               p.text(`#${serving.id}`, cx, wy + 72);
+              p.textSize(8); p.fill(180, 190, 255); p.text("服务中", cx, wy + 90);
               // wait time badge
               p.fill(99, 102, 241, 0.85); p.rect(cx - 20, wy + 87, 40, 14, 4);
               p.fill(200, 204, 255); p.textSize(8);
@@ -457,17 +500,19 @@ export default function P5QueueVisualization({
 
             // utilization mini-bar below booth
             const winData = sim.windows[wi];
-            const util = winData ? Math.min(1, winData.totalServed / Math.max(1, sim.statistics.totalCustomers)) : 0;
+            const servedAtT = sim.customers.filter(c => c.windowId === wi + 1 && c.endTime <= t).length;
+            const util = winData ? Math.min(1, servedAtT / Math.max(1, sim.statistics.totalCustomers)) : 0;
             p.fill(30, 38, 60); p.rect(wx2, wy + WIN_H + 8, WIN_W, 6, 3);
             p.fill(serving ? 99 : 60, serving ? 102 : 80, serving ? 241 : 140);
             p.rect(wx2, wy + WIN_H + 8, WIN_W * util, 6, 3);
             p.fill(120, 130, 180); p.textSize(9); p.textAlign(p.CENTER, p.TOP);
-            p.text(`已服务 ${winData ? winData.totalServed : 0}`, cx, wy + WIN_H + 18);
+            p.text(`已服务 ${servedAtT}`, cx, wy + WIN_H + 18);
 
-            // queue: 纵向方块，带编号和等待时间 (改为从窗口下方排列，确保可见)
-            const BLOCK_H = 20;
-            const BLOCK_W = WIN_W - 8;
-            const QUEUE_START_Y = wy + WIN_H + 35; // 避开利用率条和标签
+            // queue: 纵向方块，带编号和等待时间 (重构为靠左排列)
+            const BLOCK_H = 18;
+            const BLOCK_W = Math.floor(WIN_W * 0.48);
+            const qx = cx - WIN_W * 0.25; // 靠左中轴线
+            const QUEUE_START_Y = wy + WIN_H + 35;
             const maxShow = Math.floor((H - QUEUE_START_Y - 20) / (BLOCK_H + 3));
 
             queue.slice(0, maxShow).forEach((c, qi) => {
@@ -476,19 +521,17 @@ export default function P5QueueVisualization({
               const [r, g, b] = waitCol(waitAtT);
               // 方块背景
               p.fill(r, g, b, 0.85);
-              p.rect(cx - BLOCK_W/2, qy - BLOCK_H/2, BLOCK_W, BLOCK_H, 4);
-              // 左侧序号
-              p.fill(20, 20, 30, 0.9);
-              p.rect(cx - BLOCK_W/2, qy - BLOCK_H/2, 18, BLOCK_H, 4, 0, 0, 4);
-              p.fill(255, 255, 255, 0.9); p.textSize(7.5); p.textAlign(p.CENTER, p.CENTER);
-              p.text(`${qi+1}`, cx - BLOCK_W/2 + 9, qy);
-              // 等待时间
-              p.fill(255, 255, 255, 0.85); p.textSize(7.5); p.textAlign(p.RIGHT, p.CENTER);
-              p.text(`${waitAtT.toFixed(0)}m`, cx + BLOCK_W/2 - 4, qy);
+              p.rect(qx - BLOCK_W/2, qy - BLOCK_H/2, BLOCK_W, BLOCK_H, 4);
+              // 内部文字（精简）
+              p.fill(255, 255, 255, 0.95); p.textSize(7); p.textAlign(p.CENTER, p.CENTER);
+              p.text(`${qi+1}`, qx - BLOCK_W/2 + 7, qy);
+              p.textAlign(p.RIGHT, p.CENTER);
+              p.text(`${waitAtT.toFixed(0)}m`, qx + BLOCK_W/2 - 3, qy);
             });
             if (queue.length > maxShow) {
               p.fill(148, 163, 240, 0.9); p.textSize(9); p.textAlign(p.CENTER, p.CENTER);
-              p.text(`+${queue.length - maxShow}`, cx, WIN_Y - 16 - maxShow * (BLOCK_H + 3) - 12);
+              const textY = QUEUE_START_Y + maxShow * (BLOCK_H + 3) + 10;
+              p.text(`+${queue.length - maxShow}`, qx, textY);
             }
             // 队列人数徽章
             if (queue.length > 0) {
@@ -496,6 +539,8 @@ export default function P5QueueVisualization({
               p.circle(cx + WIN_W/2 - 8, WIN_Y - 4, 18);
               p.fill(20, 20, 30); p.textSize(9); p.textAlign(p.CENTER, p.CENTER);
               p.text(`${queue.length}`, cx + WIN_W/2 - 8, WIN_Y - 4);
+              p.fill(251, 191, 36); p.textAlign(p.LEFT, p.CENTER); p.textSize(10);
+              p.text("排队", cx + WIN_W/2 + 2, WIN_Y - 4);
             }
           } // end for windows
 
@@ -506,12 +551,25 @@ export default function P5QueueVisualization({
 
           const hudX = W - 180;
           const hudY = 56;
-          p.fill(18, 24, 48, 0.88); p.rect(hudX, hudY, 172, 82, 10);
+          p.fill(18, 24, 48, 0.88); p.rect(hudX, hudY, 172, 95, 10);
           p.fill(148, 163, 240); p.textSize(11); p.textAlign(p.LEFT, p.TOP);
+
+          // 墙上时间 (假设 09:00 开门)
+          const h = Math.floor(9 + t / 60);
+          const m = Math.floor(t % 60);
+          const wallTime = `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+          p.fill(255, 255, 255, 0.9);
+          p.text(`当前时刻: ${wallTime}`, hudX + 10, hudY + 82);
+
+          const completedList = sim.customers.filter(c => c.endTime <= t);
+          const avgWaitNow = completedList.length > 0
+            ? completedList.reduce((sum, c) => sum + (c.startTime - c.arrivalTime), 0) / completedList.length
+            : 0;
+
           const hudRows: [string, string, number[]][] = [
-            ['已完成', `${completed}`, [16, 185, 129]],
+            ['已完成', `${completed}`, [156, 163, 175]],
             ['服务中', `${serving2}`, [99, 102, 241]],
-            ['等待中', `${waiting}`, [251, 191, 36]],
+            ['等待中', `${waiting}`, waitCol(avgWaitNow)],
             ['总客户', `${sim.statistics.totalCustomers}`, [148, 163, 240]],
           ];
           hudRows.forEach(([label, val, col3], idx) => {
@@ -525,18 +583,35 @@ export default function P5QueueVisualization({
           });
 
           // --- COLOR LEGEND ---
-          p.fill(18, 24, 48, 0.75); p.rect(10, H - 52, 220, 36, 8);
-          const legendItems: [string, [number,number,number]][] = [
-            ['低等待', [34, 197, 94]],
-            ['中等待', [234, 179, 8]],
-            ['高等待', [239, 68, 68]],
+          // 拆分为两个区块：等待色阶和状态
+          p.fill(18, 24, 48, 0.8); p.rect(10, H - 75, 280, 60, 10);
+
+          // 等待色阶
+          p.fill(180, 190, 230); p.textSize(9); p.textAlign(p.LEFT, p.TOP);
+          p.text("等待时长梯度", 18, H - 68);
+          const waitItems: [string, [number,number,number]][] = [
+            ['短', [34, 197, 94]],
+            ['中', [234, 179, 8]],
+            ['长', [239, 68, 68]],
           ];
-          legendItems.forEach(([label, col4], idx) => {
-            const lx = 18 + idx * 72;
-            const ly = H - 40;
-            p.fill(col4[0], col4[1], col4[2]); p.circle(lx + 6, ly + 6, 12);
-            p.fill(180, 190, 230); p.textSize(10); p.textAlign(p.LEFT, p.CENTER);
-            p.text(label, lx + 14, ly + 6);
+          waitItems.forEach(([label, col4], idx) => {
+            const lx = 85 + idx * 60;
+            const ly = H - 68;
+            p.fill(col4[0], col4[1], col4[2]); p.circle(lx + 6, ly + 5, 10);
+            p.fill(180, 190, 230); p.text(label, lx + 14, ly + 5);
+          });
+
+          // 状态标识
+          p.text("当前窗口状态", 18, H - 42);
+          const statusItems: [string, [number,number,number]][] = [
+            ['服务中', [99, 102, 241]],
+            ['空闲', [156, 163, 175]],
+          ];
+          statusItems.forEach(([label, col4], idx) => {
+            const lx = 85 + idx * 80;
+            const ly = H - 42;
+            p.fill(col4[0], col4[1], col4[2]); p.circle(lx + 6, ly + 5, 10);
+            p.fill(180, 190, 230); p.text(label, lx + 14, ly + 5);
           });
 
         }; // end draw

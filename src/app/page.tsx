@@ -296,10 +296,19 @@ export default function BankSimulationPage() {
     if (!result) return;
     setComparisonLoading(true);
     try {
-      const customerData = customers.map(c => ({
+      // 为了使对比更有意义（产生排队压力），如果当前输入客户太少，则随机生成30个客户进行对比
+      let customerData = customers.map(c => ({
         arrivalTime: parseFloat(c.arrivalTime) || 0,
         serviceTime: parseFloat(c.serviceTime) || 0,
       }));
+
+      if (customerData.length < 10) {
+        customerData = Array.from({ length: 30 }, (_, i) => ({
+          arrivalTime: i * 2 + Math.random() * 2,
+          serviceTime: 5 + Math.random() * 10
+        }));
+      }
+
       const response = await fetch('/api/simulation', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -819,7 +828,9 @@ export default function BankSimulationPage() {
                     <div className="space-y-3 text-sm">
                       <div className="flex justify-between">
                         <span className="text-gray-700">已服务客户</span>
-                        <span className="font-semibold text-gray-700">{window.totalServed} 人</span>
+                        <span className="font-semibold text-gray-700">
+                          {result.customers.filter(c => c.windowId === window.id && c.endTime <= resultCurrentTime).length} 人
+                        </span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-gray-700 font-medium">累计等待时间</span>
@@ -1012,13 +1023,23 @@ export default function BankSimulationPage() {
                 <div>
                   <div className="flex items-center justify-between mb-4">
                     <h3 className="text-lg font-semibold text-gray-700">算法艺术可视化 · 等待的代价</h3>
-                    <button
-                      onClick={runComparison}
-                      disabled={comparisonLoading}
-                      className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2"
-                    >
-                      {comparisonLoading ? '对比中…' : '📊 对比三种调度算法'}
-                    </button>
+                    <div className="flex gap-2">
+                      {comparisonResults && (
+                        <button
+                          onClick={() => setComparisonResults(null)}
+                          className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg text-sm font-semibold hover:bg-gray-300 flex items-center gap-2"
+                        >
+                          ← 返回普通视图
+                        </button>
+                      )}
+                      <button
+                        onClick={runComparison}
+                        disabled={comparisonLoading}
+                        className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2"
+                      >
+                        {comparisonLoading ? '对比中…' : '📊 对比三种调度算法'}
+                      </button>
+                    </div>
                   </div>
                   <AlgorithmicArt
                     statistics={{
