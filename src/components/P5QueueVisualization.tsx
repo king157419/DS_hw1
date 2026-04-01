@@ -55,6 +55,17 @@ interface PulseRing {
   alpha: number;
   col: [number, number, number];
 }
+
+interface LeavingDot {
+  id: number;
+  x: number; y: number;
+  tx: number; ty: number;
+  cx1: number; cy1: number;
+  cx2: number; cy2: number;
+  progress: number;
+  trail: { x: number; y: number; a: number }[];
+}
+
 export default function P5QueueVisualization({
   simulationResult,
   isPlaying,
@@ -65,6 +76,7 @@ export default function P5QueueVisualization({
   onTimeChange,
 }: P5QueueVisualizationProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const p5Ref = useRef<any>(null);
   const currentTimeRef = useRef(currentTime);
   const simRef = useRef(simulationResult);
   const isPlayingRef = useRef(isPlaying);
@@ -82,12 +94,17 @@ export default function P5QueueVisualization({
 
   useEffect(() => {
     if (!containerRef.current) return;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let p5Instance: any = null;
+    let mounted = true;
+
+    if (p5Ref.current) {
+      p5Ref.current.remove();
+      p5Ref.current = null;
+    }
 
     import('p5').then((mod) => {
+      if (!mounted || !containerRef.current) return;
       const p5 = mod.default;
-      const container = containerRef.current!;
+      const container = containerRef.current;
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const sketch = (p: any) => {
@@ -106,10 +123,13 @@ export default function P5QueueVisualization({
         const particles: Particle[] = [];
         const pulses: PulseRing[] = [];
         const flyingDots: FlyingDot[] = [];
+        const leavingDots: LeavingDot[] = [];
         const entranceRipples: { r: number; alpha: number }[] = [];
         const seenArrived = new Set<number>();
         const seenCompleted = new Set<number>();
         const seenServiceStart = new Set<number>();
+        const seenLeaving = new Set<number>();
+        const MAX_PARTICLES = 80;
 
         const winX = (i: number) => SPACING + i * (WIN_W + SPACING) + WIN_W / 2;
         const winTop = () => WIN_Y;
@@ -225,18 +245,40 @@ export default function P5QueueVisualization({
               seenCompleted.add(c.id);
               const wx = winX(c.windowId - 1);
               const wy = WIN_Y + WIN_H / 2;
-              for (let i = 0; i < 22; i++) {
-                const angle = p.random(p.TWO_PI);
-                const spd = p.random(1.5, 4.5);
-                particles.push({
-                  x: wx, y: wy,
-                  vx: Math.cos(angle) * spd,
-                  vy: Math.sin(angle) * spd - 1,
-                  alpha: 1, r: p.random(4, 9),
-                  col: i % 2 === 0 ? [251, 191, 36] : [16, 185, 129],
-                });
+              // 粒子爆炸（限制总数）
+              if (particles.length < MAX_PARTICLES) {
+                for (let i = 0; i < Math.min(12, MAX_PARTICLES - particles.length); i++) {
+                  const angle = p.random(p.TWO_PI);
+                  const spd = p.random(1.5, 3.5);
+                  particles.push({
+                    x: wx, y: wy,
+                    vx: Math.cos(angle) * spd,
+                    vy: Math.sin(angle) * spd - 1,
+                    alpha: 1, r: p.random(3, 7),
+                    col: i % 2 === 0 ? [251, 191, 36] : [16, 185, 129],
+                  });
+                }
               }
               pulses.push({ x: wx, y: wy, r: 20, maxR: 70, alpha: 0.7, col: [16, 185, 129] });
+            }
+            // 离开动画：从窗口飞向出口
+            if (c.endTime <= t && !seenLeaving.has(c.id)) {
+              seenLeaving.add(c.id);
+              const wx2 = winX(c.windowId - 1);
+              const wy2 = WIN_Y + WIN_H - 10;
+              const ex = ENTRANCE_X + p.random(-40, 40);
+              const ey = ENTRANCE_Y;
+              leavingDots.push({
+                id: c.id,
+                x: wx2, y: wy2,
+                tx: ex, ty: ey,
+                cx1: wx2 + (ex - wx2) * 0.3,
+                cy1: wy2 + 60,
+                cx2: ex - (ex - wx2) * 0.2,
+                cy2: ey - 40,
+                progress: 0,
+                trail: [],
+              });
             }
           });
 
@@ -305,7 +347,7 @@ export default function P5QueueVisualization({
           // --- FLYING DOTS (bezier) ---
           for (let i = flyingDots.length - 1; i >= 0; i--) {
             const fd = flyingDots[i];
-            fd.progress = Math.min(1, fd.progress + 0.025);
+            fd.progress = Math.min(1, fd.progress + Math.min(0.025 * speedRef.current, 0.5));
             const [bx, by] = bezier(fd.progress,
               ENTRANCE_X, ENTRANCE_Y,
               fd.cx1, fd.cy1,
@@ -324,6 +366,28 @@ export default function P5QueueVisualization({
             p.circle(bx, by, 14);
             p.fill(255, 255, 255, 0.7); p.circle(bx - 2, by - 2, 4);
             if (fd.progress >= 1) flyingDots.splice(i, 1);
+          }
+
+          // --- LEAVING DOTS (gold bezier, window → exit) ---
+          for (let i = leavingDots.length - 1; i >= 0; i--) {
+            const ld = leavingDots[i];
+            ld.progress = Math.min(1, ld.progress + 0.022);
+            const u = ld.progress;
+            const u1 = 1 - u;
+            const lbx = u1*u1*u1*ld.x + 3*u1*u1*u*ld.cx1 + 3*u1*u*u*ld.cx2 + u*u*u*ld.tx;
+            const lby = u1*u1*u1*ld.y + 3*u1*u1*u*ld.cy1 + 3*u1*u*u*ld.cy2 + u*u*u*ld.ty;
+            // trail
+            ld.trail.push({ x: lbx, y: lby, a: 0.5 });
+            if (ld.trail.length > 5) ld.trail.shift();
+            ld.trail.forEach((tr, ti) => {
+              p.fill(251, 191, 36, tr.a * (ti / ld.trail.length) * 0.5);
+              p.circle(tr.x, tr.y, 7);
+            });
+            // gold dot
+            p.fill(251, 191, 36, 1 - u * 0.3);
+            p.circle(lbx, lby, 12);
+            p.fill(255, 240, 180, 0.8); p.circle(lbx - 2, lby - 2, 4);
+            if (ld.progress >= 1) leavingDots.splice(i, 1);
           }
 
           // --- WINDOWS ---
@@ -400,20 +464,38 @@ export default function P5QueueVisualization({
             p.fill(120, 130, 180); p.textSize(9); p.textAlign(p.CENTER, p.TOP);
             p.text(`已服务 ${winData ? winData.totalServed : 0}`, cx, wy + WIN_H + 18);
 
-            // queue dots above window
-            const maxShow = Math.floor((WIN_Y - 60) / 22);
+            // queue: 纵向方块，带编号和等待时间 (改为从窗口下方排列，确保可见)
+            const BLOCK_H = 20;
+            const BLOCK_W = WIN_W - 8;
+            const QUEUE_START_Y = wy + WIN_H + 35; // 避开利用率条和标签
+            const maxShow = Math.floor((H - QUEUE_START_Y - 20) / (BLOCK_H + 3));
+
             queue.slice(0, maxShow).forEach((c, qi) => {
-              const qy = WIN_Y - 18 - qi * 22;
-              const [r, g, b] = waitCol(c.waitTime);
-              const shimmer = 0.7 + 0.3 * Math.sin(p.frameCount * 0.08 + qi * 1.2);
-              p.fill(r, g, b, shimmer); p.circle(cx, qy, 18);
-              p.fill(255, 255, 255, 0.35); p.circle(cx - 3, qy - 3, 5);
-              p.fill(20, 20, 30); p.textSize(8); p.textAlign(p.CENTER, p.CENTER);
-              p.text(`${c.id}`, cx, qy);
+              const qy = QUEUE_START_Y + qi * (BLOCK_H + 3);
+              const waitAtT = Math.max(0, t - c.arrivalTime);
+              const [r, g, b] = waitCol(waitAtT);
+              // 方块背景
+              p.fill(r, g, b, 0.85);
+              p.rect(cx - BLOCK_W/2, qy - BLOCK_H/2, BLOCK_W, BLOCK_H, 4);
+              // 左侧序号
+              p.fill(20, 20, 30, 0.9);
+              p.rect(cx - BLOCK_W/2, qy - BLOCK_H/2, 18, BLOCK_H, 4, 0, 0, 4);
+              p.fill(255, 255, 255, 0.9); p.textSize(7.5); p.textAlign(p.CENTER, p.CENTER);
+              p.text(`${qi+1}`, cx - BLOCK_W/2 + 9, qy);
+              // 等待时间
+              p.fill(255, 255, 255, 0.85); p.textSize(7.5); p.textAlign(p.RIGHT, p.CENTER);
+              p.text(`${waitAtT.toFixed(0)}m`, cx + BLOCK_W/2 - 4, qy);
             });
             if (queue.length > maxShow) {
-              p.fill(148, 163, 240); p.textSize(10); p.textAlign(p.CENTER, p.CENTER);
-              p.text(`+${queue.length - maxShow}`, cx, WIN_Y - 18 - maxShow * 22 - 14);
+              p.fill(148, 163, 240, 0.9); p.textSize(9); p.textAlign(p.CENTER, p.CENTER);
+              p.text(`+${queue.length - maxShow}`, cx, WIN_Y - 16 - maxShow * (BLOCK_H + 3) - 12);
+            }
+            // 队列人数徽章
+            if (queue.length > 0) {
+              p.fill(251, 191, 36); p.noStroke();
+              p.circle(cx + WIN_W/2 - 8, WIN_Y - 4, 18);
+              p.fill(20, 20, 30); p.textSize(9); p.textAlign(p.CENTER, p.CENTER);
+              p.text(`${queue.length}`, cx + WIN_W/2 - 8, WIN_Y - 4);
             }
           } // end for windows
 
@@ -460,10 +542,16 @@ export default function P5QueueVisualization({
         }; // end draw
       }; // end sketch
 
-      p5Instance = new p5(sketch, container);
+      p5Ref.current = new p5(sketch, container);
     });
 
-    return () => { p5Instance?.remove(); };
+    return () => {
+      mounted = false;
+      if (p5Ref.current) {
+        p5Ref.current.remove();
+        p5Ref.current = null;
+      }
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [simulationResult]);
 

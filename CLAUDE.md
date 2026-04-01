@@ -5,49 +5,45 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-# Install dependencies
-bun install
+# Development
+bun install          # Install dependencies
+bun run dev          # Start dev server (port 3000)
 
-# Start dev server (port 3000)
-bun run dev
+# Build & Production
+bun run build        # Build for production
+bun run start        # Start production server
 
-# Build for production
-bun run build
+# Code Quality
+bun run lint         # Run ESLint
+bun run lint:fix     # Run ESLint with auto-fix
 
-# Start production server
-bun run start
-
-# Lint
-bun run lint
+# Testing (if/when added)
+# bun test           # Run all tests
+# bun test <path>    # Run specific test file
 ```
 
 ## Architecture
 
 This is a Next.js 15 + TypeScript bank queue simulation app (数据结构课程项目).
 
-### Core data flow
+### Core Simulation Engine (`src/lib/bank-simulation.ts`)
 
-1. **`src/lib/bank-simulation.ts`** — all simulation logic. Contains the event-driven algorithm:
-   - `Customer`, `Window`, `Event`, `TimelineEvent` interfaces
-   - Priority: assign arriving customers to idle windows first; otherwise push to the shortest queue
-   - Processes events chronologically; computes wait time, sojourn time, window utilization
+Event-driven simulation logic using a chronological timeline:
+- **`BankSimulation`**: Core class for manual customer input.
+- **`RealisticBankSimulation`**: Extends logic for auto-generated distributions (Poisson arrival, Exponential service).
+- **Priority Logic**: Idle windows are filled first; otherwise, customers join the queue with the shortest length.
+- **Metrics**: Computes Wait Time (`startTime - arrivalTime`), Sojourn Time (`endTime - arrivalTime`), and Window Utilization.
 
-2. **`src/app/api/simulation/route.ts`** — POST API endpoint dispatching on `action` field:
-   - `simulate`: runs `BankSimulation` with manual customer input
-   - `realistic`: runs `RealisticBankSimulation` with a `BankConfig` (auto-generates customers)
-   - `validate`: validates input without running
-   - `testData`: returns generated test data via `generateTestData(type)`
+### Data Flow & API
 
-3. **`src/app/page.tsx`** — single-page client UI with three tabs:
-   - 数据输入: window count slider, customer table (arrival/service time), test data loaders
-   - 模拟结果: stats overview, per-window status, customer detail table
-   - 时间线: chronological event log
+- **API (`src/app/api/simulation/route.ts`)**: POST endpoint handling `simulate`, `realistic`, `validate`, and `testData` actions.
+- **State Management**: React state in `src/app/page.tsx` manages simulation inputs and results across three tabs (Input, Results, Timeline).
+- **Visualization (`src/components/`)**:
+  - `P5QueueVisualization.tsx`: Real-time queue animation using p5.js.
+  - `AlgorithmicArt.tsx`: Particle/flow-field visualization driven by simulation data.
 
-4. **`src/app/layout.tsx`** — root layout; **`src/app/globals.css`** — Tailwind base styles
+### Key Invariants
 
-### Key algorithm invariants
-
-- Events are sorted by time before processing
-- Idle window check happens before shortest-queue assignment
-- `waitTime = startTime - arrivalTime`; `sojournTime = endTime - arrivalTime`
-- Input validation rejects negative arrival times and non-positive service times; out-of-order arrival times produce a warning but still run
+- Events must be sorted by time before processing.
+- Idle window check happens *before* shortest-queue assignment.
+- Input validation: Non-negative arrival times, positive service times.

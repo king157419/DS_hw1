@@ -33,10 +33,15 @@ export interface Window {
   totalWaitTime: number;         // 累计等待时间
   totalServiceTime: number;      // 累计服务时间
   idleTime: number;              // 空闲时间
+  isOnBreak: boolean;            // 是否正在休息
+  breakEndTime: number;          // 休息结束时间
+  breakType: 'none' | 'lunch' | 'window' | 'toilet'; // 休息类型
+  nextWindowBreakTime: number;   // 下次轮休时间
+  nextToiletBreakTime: number;   // 下次上厕所时间
 }
 
 // 事件类型
-export type EventType = 'arrival' | 'departure';
+export type EventType = 'arrival' | 'departure' | 'break_end';
 
 // 事件接口
 export interface Event {
@@ -110,7 +115,12 @@ export class BankSimulation {
         totalServed: 0,
         totalWaitTime: 0,
         totalServiceTime: 0,
-        idleTime: 0
+        idleTime: 0,
+        isOnBreak: false,
+        breakEndTime: 0,
+        breakType: 'none',
+        nextWindowBreakTime: Infinity,
+        nextToiletBreakTime: Infinity,
       });
     }
   }
@@ -472,6 +482,16 @@ export interface BankConfig {
   pensionDayMultiplier: number;       // 养老金日流量倍数
   elderlyRatio: number;               // 老年客户比例 (0-1)
 
+  // 窗口轮休配置
+  windowBreakEnabled: boolean;        // 是否启用窗口轮休
+  windowBreakInterval: number;        // 轮休间隔（分钟，默认120）
+  windowBreakDuration: number;        // 轮休时长（分钟，默认10）
+
+  // 上厕所配置
+  toiletBreakEnabled: boolean;        // 是否启用上厕所
+  toiletBreakProbability: number;     // 每小时触发概率（默认0.3）
+  toiletBreakDuration: number;        // 上厕所时长（分钟，默认5）
+
   // 随机种子 (用于可重现结果)
   seed?: number;
 }
@@ -560,6 +580,8 @@ export class RealisticBankSimulation {
    */
   private initializeWindows(): void {
     for (let i = 0; i < this.config.baseWindowCount; i++) {
+      // 错开各窗口的轮休时间，避免同时休息
+      const staggerOffset = i * (this.config.windowBreakInterval / this.config.baseWindowCount);
       this.windows.push({
         id: i + 1,
         queue: [],
@@ -567,7 +589,12 @@ export class RealisticBankSimulation {
         totalServed: 0,
         totalWaitTime: 0,
         totalServiceTime: 0,
-        idleTime: 0
+        idleTime: 0,
+        isOnBreak: false,
+        breakEndTime: 0,
+        breakType: 'none',
+        nextWindowBreakTime: this.config.openTime + staggerOffset + this.config.windowBreakInterval,
+        nextToiletBreakTime: this.config.openTime + this.rng.next() * 60,
       });
     }
   }
@@ -702,7 +729,12 @@ export class RealisticBankSimulation {
       totalServed: 0,
       totalWaitTime: 0,
       totalServiceTime: 0,
-      idleTime: 0
+      idleTime: 0,
+      isOnBreak: false,
+      breakEndTime: 0,
+      breakType: 'none',
+      nextWindowBreakTime: this.currentTime + this.config.windowBreakInterval,
+      nextToiletBreakTime: this.currentTime + this.rng.next() * 60,
     };
     this.windows.push(newWindow);
 
@@ -896,6 +928,64 @@ export class RealisticBankSimulation {
   }
 
   /**
+   * 检查并触发窗口休息
+   */
+  private processWindowBreaks(): void {
+    for (const window of this.windows) {
+      if (window.isOnBreak) continue;
+      if (this.config.windowBreakEnabled &&
+          this.currentTime >= window.nextWindowBreakTime &&
+          window.currentCustomer === null) {
+        this.startWindowBreak(window, 'window', this.config.windowBreakDuration);
+        continue;
+      }
+      if (this.config.toiletBreakEnabled &&
+          this.currentTime >= window.nextToiletBreakTime &&
+          window.currentCustomer === null) {
+        this.startWindowBreak(window, 'toilet', this.config.toiletBreakDuration);
+      }
+    }
+  }
+
+  private startWindowBreak(window: Window, type: 'lunch' | 'window' | 'toilet', duration: number): void {
+    window.isOnBreak = true;
+    window.breakType = type;
+    window.breakEndTime = this.currentTime + duration;
+    const typeLabel = type === 'lunch' ? '午休' : type === 'window' ? '轮休' : '如厕';
+    this.timeline.push({ time: this.currentTime, type: 'start_service', customerId: 0, windowId: window.id, description: `窗口${window.id}开始${typeLabel}（${duration}分钟），队列客户转移` });
+    while (window.queue.length > 0) {
+      const c = window.queue.shift()!;
+      const others = this.windows.filter(w => w.id !== window.id && !w.isOnBreak);
+      if (others.length === 0) { window.queue.unshift(c); break; }
+      const target = others.reduce((a, b) => a.queue.length <= b.queue.length ? a : b);
+      c.windowId = target.id;
+      target.queue.push(c);
+    }
+    const dummy: Customer = { id: -window.id, arrivalTime: 0, serviceTime: 0, startTime: 0, endTime: 0, windowId: window.id, waitTime: 0, status: 'waiting' };
+    this.events.push({ type: 'break_end', time: window.breakEndTime, customer: dummy, windowId: window.id });
+  }
+
+  private processBreakEnd(windowId: number): void {
+    const window = this.windows.find(w => w.id === windowId);
+    if (!window) return;
+    const typeLabel = window.breakType === 'lunch' ? '午休' : window.breakType === 'window' ? '轮休' : '如厕';
+    window.isOnBreak = false;
+    window.breakType = 'none';
+    if (this.config.windowBreakEnabled) window.nextWindowBreakTime = this.currentTime + this.config.windowBreakInterval;
+    if (this.config.toiletBreakEnabled) window.nextToiletBreakTime = this.currentTime + 30 + this.rng.next() * 60;
+    this.timeline.push({ time: this.currentTime, type: 'end_service', customerId: 0, windowId: window.id, description: `窗口${window.id}${typeLabel}结束，恢复服务` });
+    if (window.queue.length > 0) {
+      const next = window.queue.shift()!;
+      next.startTime = this.currentTime;
+      next.endTime = this.currentTime + next.serviceTime;
+      next.waitTime = this.currentTime - next.arrivalTime;
+      next.status = 'serving';
+      window.currentCustomer = next;
+      this.events.push({ type: 'departure', time: next.endTime, customer: next, windowId: window.id });
+    }
+  }
+
+  /**
    * 运行模拟
    */
   run(): SimulationResult {
@@ -910,10 +1000,15 @@ export class RealisticBankSimulation {
       const event = this.events.shift()!;
       this.currentTime = event.time;
 
+      // 检查各窗口休息状态
+      this.processWindowBreaks();
+
       if (event.type === 'arrival') {
         this.assignCustomerToWindow(event.customer);
       } else if (event.type === 'departure' && event.windowId) {
         this.processDeparture(event.windowId);
+      } else if (event.type === 'break_end' && event.windowId) {
+        this.processBreakEnd(event.windowId);
       }
     }
 
@@ -1026,6 +1121,12 @@ export function getDefaultConfig(): BankConfig {
     isPensionDay: false,
     pensionDayMultiplier: 4,
     elderlyRatio: 0.6,
+    windowBreakEnabled: false,
+    windowBreakInterval: 120,
+    windowBreakDuration: 10,
+    toiletBreakEnabled: false,
+    toiletBreakProbability: 0.3,
+    toiletBreakDuration: 5,
     seed: undefined
   };
 }

@@ -82,8 +82,18 @@ export default function BankSimulationPage() {
 
   // 随机模拟配置
   const [bankConfig, setBankConfig] = useState({
-    closeTime: 50, // 营业时长（分钟）
-    avgServiceTime: 5 // 平均服务时间
+    closeTime: 50,          // 客户数量
+    avgServiceTime: 5,      // 平均服务时间
+    // 真实情况参数
+    lunchBreakEnabled: false,
+    lunchStart: 180,        // 开门后180分钟（12:00）
+    lunchDuration: 60,
+    windowBreakEnabled: false,
+    windowBreakInterval: 120,
+    windowBreakDuration: 10,
+    toiletBreakEnabled: false,
+    toiletBreakProbability: 0.3,
+    toiletBreakDuration: 5,
   });
 
   // 算法对比结果
@@ -231,41 +241,40 @@ export default function BankSimulationPage() {
   const runRealisticSimulation = useCallback(async () => {
     setLoading(true);
     setError(null);
-
     try {
-      // 生成随机客户数据
-      const customerCount = bankConfig.closeTime;
-      const avgServiceTime = bankConfig.avgServiceTime;
-
-      // 随机生成客户到达时间和服务时间
-      const randomCustomers = [];
-      let currentTime = 0;
-      for (let i = 0; i < customerCount; i++) {
-        // 随机到达间隔 (0-5分钟)
-        const arrivalInterval = Math.random() * 5;
-        currentTime += arrivalInterval;
-        // 随机服务时间 (avgServiceTime的50%-150%)
-        const serviceTime = Math.max(1, Math.round(avgServiceTime * (0.5 + Math.random())));
-        randomCustomers.push({
-          arrivalTime: Math.round(currentTime * 10) / 10,
-          serviceTime
-        });
-      }
-
+      const totalDuration = bankConfig.closeTime * (bankConfig.avgServiceTime * 0.8 + 2);
+      const config = {
+        baseWindowCount: 4,
+        maxWindowCount: 6,
+        elasticThreshold: 5,
+        openTime: 0,
+        closeTime: totalDuration,
+        lunchBreakEnabled: bankConfig.lunchBreakEnabled,
+        lunchStart: bankConfig.lunchStart,
+        lunchDuration: bankConfig.lunchDuration,
+        baseArrivalRate: bankConfig.closeTime / totalDuration,
+        peakHoursMultiplier: 1.5,
+        peakHoursStart: totalDuration * 0.2,
+        peakHoursEnd: totalDuration * 0.5,
+        avgServiceTime: bankConfig.avgServiceTime,
+        serviceTimeStdDev: bankConfig.avgServiceTime * 0.3,
+        isPensionDay: false,
+        pensionDayMultiplier: 3,
+        elderlyRatio: 0.3,
+        windowBreakEnabled: bankConfig.windowBreakEnabled,
+        windowBreakInterval: bankConfig.windowBreakInterval,
+        windowBreakDuration: bankConfig.windowBreakDuration,
+        toiletBreakEnabled: bankConfig.toiletBreakEnabled,
+        toiletBreakProbability: bankConfig.toiletBreakProbability,
+        toiletBreakDuration: bankConfig.toiletBreakDuration,
+        seed: Date.now(),
+      };
       const response = await fetch('/api/simulation', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'simulate',
-          data: {
-            windowCount: windowCount,
-            customers: randomCustomers
-          }
-        })
+        body: JSON.stringify({ action: 'realistic', data: config })
       });
-
       const data = await response.json();
-
       if (data.success) {
         setResult(data.result);
         setComparisonResults(null);
@@ -280,7 +289,7 @@ export default function BankSimulationPage() {
     } finally {
       setLoading(false);
     }
-  }, [bankConfig, windowCount]);
+  }, [bankConfig]);
 
   // 对比三种调度算法
   const runComparison = useCallback(async () => {
@@ -641,6 +650,101 @@ export default function BankSimulationPage() {
                   <div className="flex justify-between text-xs text-gray-500 mt-1"><span>2分钟</span><span>15分钟</span></div>
                 </div>
               </div>
+            {/* 真实情况开关面板 */}
+            <div className="bg-white rounded-2xl border-2 border-gray-200 shadow">
+              <div className="p-4 border-b border-gray-100">
+                <h3 className="text-base font-bold text-gray-800">🔧 真实情况模拟参数</h3>
+                <p className="text-xs text-gray-500 mt-1">开启后模拟更接近真实银行运营</p>
+              </div>
+              <div className="p-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+                {/* 午休 */}
+                <div className="rounded-xl border border-gray-200 p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-bold text-gray-700 text-sm">🍱 午休</span>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input type="checkbox" checked={bankConfig.lunchBreakEnabled}
+                        onChange={e => setBankConfig({...bankConfig, lunchBreakEnabled: e.target.checked})}
+                        className="sr-only peer" />
+                      <div className="w-9 h-5 bg-gray-200 peer-checked:bg-indigo-500 rounded-full peer transition-colors"></div>
+                      <div className="absolute left-0.5 top-0.5 w-4 h-4 bg-white rounded-full shadow peer-checked:translate-x-4 transition-transform"></div>
+                    </label>
+                  </div>
+                  {bankConfig.lunchBreakEnabled && (
+                    <div className="space-y-1 mt-2">
+                      <div className="flex justify-between text-xs text-gray-600">
+                        <span>开始（开门后）</span>
+                        <span className="font-bold text-indigo-600">{bankConfig.lunchStart}分钟</span>
+                      </div>
+                      <input type="range" min="60" max="240" step="10" value={bankConfig.lunchStart}
+                        onChange={e => setBankConfig({...bankConfig, lunchStart: Number(e.target.value)})}
+                        className="w-full h-2" />
+                      <div className="flex justify-between text-xs text-gray-600 mt-1">
+                        <span>时长</span>
+                        <span className="font-bold text-indigo-600">{bankConfig.lunchDuration}分钟</span>
+                      </div>
+                      <input type="range" min="15" max="90" step="5" value={bankConfig.lunchDuration}
+                        onChange={e => setBankConfig({...bankConfig, lunchDuration: Number(e.target.value)})}
+                        className="w-full h-2" />
+                    </div>
+                  )}
+                </div>
+                {/* 轮休 */}
+                <div className="rounded-xl border border-gray-200 p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-bold text-gray-700 text-sm">💤 窗口轮休</span>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input type="checkbox" checked={bankConfig.windowBreakEnabled}
+                        onChange={e => setBankConfig({...bankConfig, windowBreakEnabled: e.target.checked})}
+                        className="sr-only peer" />
+                      <div className="w-9 h-5 bg-gray-200 peer-checked:bg-indigo-500 rounded-full peer transition-colors"></div>
+                      <div className="absolute left-0.5 top-0.5 w-4 h-4 bg-white rounded-full shadow peer-checked:translate-x-4 transition-transform"></div>
+                    </label>
+                  </div>
+                  {bankConfig.windowBreakEnabled && (
+                    <div className="space-y-1 mt-2">
+                      <div className="flex justify-between text-xs text-gray-600">
+                        <span>间隔</span>
+                        <span className="font-bold text-indigo-600">{bankConfig.windowBreakInterval}分钟</span>
+                      </div>
+                      <input type="range" min="60" max="240" step="10" value={bankConfig.windowBreakInterval}
+                        onChange={e => setBankConfig({...bankConfig, windowBreakInterval: Number(e.target.value)})}
+                        className="w-full h-2" />
+                      <div className="flex justify-between text-xs text-gray-600 mt-1">
+                        <span>时长</span>
+                        <span className="font-bold text-indigo-600">{bankConfig.windowBreakDuration}分钟</span>
+                      </div>
+                      <input type="range" min="5" max="30" step="5" value={bankConfig.windowBreakDuration}
+                        onChange={e => setBankConfig({...bankConfig, windowBreakDuration: Number(e.target.value)})}
+                        className="w-full h-2" />
+                    </div>
+                  )}
+                </div>
+                {/* 上厕所 */}
+                <div className="rounded-xl border border-gray-200 p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-bold text-gray-700 text-sm">🚻 如厕休息</span>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input type="checkbox" checked={bankConfig.toiletBreakEnabled}
+                        onChange={e => setBankConfig({...bankConfig, toiletBreakEnabled: e.target.checked})}
+                        className="sr-only peer" />
+                      <div className="w-9 h-5 bg-gray-200 peer-checked:bg-indigo-500 rounded-full peer transition-colors"></div>
+                      <div className="absolute left-0.5 top-0.5 w-4 h-4 bg-white rounded-full shadow peer-checked:translate-x-4 transition-transform"></div>
+                    </label>
+                  </div>
+                  {bankConfig.toiletBreakEnabled && (
+                    <div className="space-y-1 mt-2">
+                      <div className="flex justify-between text-xs text-gray-600">
+                        <span>时长</span>
+                        <span className="font-bold text-indigo-600">{bankConfig.toiletBreakDuration}分钟</span>
+                      </div>
+                      <input type="range" min="3" max="15" step="1" value={bankConfig.toiletBreakDuration}
+                        onChange={e => setBankConfig({...bankConfig, toiletBreakDuration: Number(e.target.value)})}
+                        className="w-full h-2" />
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
               <button
                 onClick={runRealisticSimulation}
                 disabled={loading}
