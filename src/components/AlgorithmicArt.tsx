@@ -65,20 +65,30 @@ function waitColor(wt: number, avgWait: number): [number,number,number] {
 export default function AlgorithmicArt({ statistics, windows, customers, comparisonResults }: AlgorithmicArtProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const p5Ref = useRef<any>(null);
-  const isComparison = !!(comparisonResults && comparisonResults.length > 0);
+  const statisticsRef = useRef(statistics);
+  const windowsRef = useRef(windows);
+  const customersRef = useRef(customers);
+  const comparisonResultsRef = useRef(comparisonResults);
 
   const utilization = windows.map(w =>
     Math.min(1, w.totalServiceTime / Math.max(1, statistics.totalSimulationTime))
   );
-  useEffect(() => {
-    if (!containerRef.current) return;
-    let mounted = true;
 
-    // 先清理旧实例
+  useEffect(() => {
+    statisticsRef.current = statistics;
+    windowsRef.current = windows;
+    customersRef.current = customers;
+    comparisonResultsRef.current = comparisonResults;
+
     if (p5Ref.current) {
-      p5Ref.current.remove();
-      p5Ref.current = null;
+      p5Ref.current.redraw();
     }
+  }, [statistics, windows, customers, comparisonResults]);
+
+  useEffect(() => {
+    if (!containerRef.current || p5Ref.current) return;
+
+    let mounted = true;
 
     import('p5').then((mod) => {
       if (!mounted || !containerRef.current) return;
@@ -97,10 +107,11 @@ export default function AlgorithmicArt({ statistics, windows, customers, compari
 
         p.draw = () => {
           p.background(C.bg[0], C.bg[1], C.bg[2]);
-          if (isComparison && comparisonResults && comparisonResults.length > 0) {
-            drawComparison(p, W, H, comparisonResults);
+          const nextComparisonResults = comparisonResultsRef.current;
+          if (nextComparisonResults && nextComparisonResults.length > 0) {
+            drawComparison(p, W, H, nextComparisonResults);
           } else {
-            drawSingle(p, W, H, statistics, windows, customers);
+            drawSingle(p, W, H, statisticsRef.current, windowsRef.current, customersRef.current);
           }
         };
       };
@@ -115,7 +126,7 @@ export default function AlgorithmicArt({ statistics, windows, customers, compari
         p5Ref.current = null;
       }
     };
-  }, [statistics, windows, customers, comparisonResults, isComparison]);
+  }, []);
   return (
     <div style={{ display: 'flex', background: '#14141300', borderRadius: 12, overflow: 'hidden', minHeight: 420 }}>
       {/* 侧边栏 */}
@@ -378,8 +389,6 @@ function drawRadar(p: any, cx: number, cy: number, stats: any, windows: any[]) {
     p.text(axes[i], tx, ty);
   }
 }
-
-
 
 
 

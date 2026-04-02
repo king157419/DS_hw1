@@ -38,10 +38,12 @@ export interface Window {
   breakType: 'none' | 'lunch' | 'window' | 'toilet'; // 休息类型
   nextWindowBreakTime: number;   // 下次轮休时间
   nextToiletBreakTime: number;   // 下次上厕所时间
+  hasTakenLunch: boolean;        // 是否已完成午休
+  lunchPending: boolean;         // 午休是否待触发
 }
 
 // 事件类型
-export type EventType = 'arrival' | 'departure' | 'break_end';
+export type EventType = 'arrival' | 'departure' | 'break_end' | 'lunch_start';
 
 // 事件接口
 export interface Event {
@@ -93,6 +95,22 @@ export interface ValidationResult {
   warnings: string[];
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) > 0;
+}
+
+function isBoolean(value: unknown): value is boolean {
+  return typeof value === 'boolean';
+}
+
 /**
  * 银行模拟类
  */
@@ -121,6 +139,8 @@ export class BankSimulation {
         breakType: 'none',
         nextWindowBreakTime: Infinity,
         nextToiletBreakTime: Infinity,
+        hasTakenLunch: false,
+        lunchPending: false,
       });
     }
   }
@@ -339,43 +359,65 @@ export class BankSimulation {
 /**
  * 验证输入数据
  */
-export function validateInput(input: SimulationInput): ValidationResult {
+export function validateInput(input: unknown): ValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];
 
-  // 验证窗口数量
-  if (input.windowCount < 1) {
-    errors.push('窗口数量必须大于0');
+  if (!isRecord(input)) {
+    return {
+      isValid: false,
+      errors: ['输入数据必须是对象'],
+      warnings,
+    };
   }
-  if (input.windowCount > 10) {
-    warnings.push('窗口数量超过10个，可能影响显示效果');
+
+  const { windowCount, customers } = input;
+
+  // 验证窗口数量
+  if (!isPositiveInteger(windowCount)) {
+    errors.push('窗口数量必须为正整数');
+  } else if (windowCount < 1) {
+    errors.push('窗口数量必须大于0');
+  } else if (windowCount > 10) {
+    errors.push('窗口数量不能超过10个');
   }
 
   // 验证客户数据
-  if (!input.customers || input.customers.length === 0) {
+  if (!Array.isArray(customers)) {
+    errors.push('客户数据必须为数组');
+  } else if (customers.length === 0) {
     errors.push('客户数据不能为空');
   }
 
   let prevArrivalTime = -1;
-  for (let i = 0; i < input.customers.length; i++) {
-    const customer = input.customers[i];
+  for (let i = 0; Array.isArray(customers) && i < customers.length; i++) {
+    const customer = customers[i];
+
+    if (!isRecord(customer)) {
+      errors.push(`第${i + 1}个客户的数据格式无效`);
+      continue;
+    }
+
+    const { arrivalTime, serviceTime } = customer;
 
     // 验证到达时间
-    if (typeof customer.arrivalTime !== 'number' || isNaN(customer.arrivalTime)) {
+    if (!isFiniteNumber(arrivalTime)) {
       errors.push(`第${i + 1}个客户的到达时间无效`);
-    } else if (customer.arrivalTime < 0) {
+    } else if (arrivalTime < 0) {
       errors.push(`第${i + 1}个客户的到达时间不能为负数`);
-    } else if (customer.arrivalTime < prevArrivalTime) {
+    } else if (arrivalTime < prevArrivalTime) {
       warnings.push(`第${i + 1}个客户的到达时间早于前一个客户，建议按时间顺序输入`);
     }
-    prevArrivalTime = customer.arrivalTime;
+    if (isFiniteNumber(arrivalTime)) {
+      prevArrivalTime = arrivalTime;
+    }
 
     // 验证服务时间
-    if (typeof customer.serviceTime !== 'number' || isNaN(customer.serviceTime)) {
+    if (!isFiniteNumber(serviceTime)) {
       errors.push(`第${i + 1}个客户的服务时间无效`);
-    } else if (customer.serviceTime <= 0) {
+    } else if (serviceTime <= 0) {
       errors.push(`第${i + 1}个客户的服务时间必须大于0`);
-    } else if (customer.serviceTime > 120) {
+    } else if (serviceTime > 120) {
       warnings.push(`第${i + 1}个客户的服务时间超过120分钟，可能不合理`);
     }
   }
@@ -558,12 +600,14 @@ export class RealisticBankSimulation {
   private config: BankConfig;
   private rng: SeededRandom;
   private windows: Window[] = [];
+  private retiredWindows: Window[] = [];
   private customers: Customer[] = [];
   private events: Event[] = [];
   private timeline: TimelineEvent[] = [];
   private currentTime: number = 0;
   private customerIdCounter: number = 1;
   private activeWindowCount: number = 0;
+  private nextWindowId: number = 1;
   private hourlyTraffic: HourlyTrafficPattern[] = [];
   private maxQueueLength: number = 0;
 
@@ -571,6 +615,7 @@ export class RealisticBankSimulation {
     this.config = config;
     this.rng = new SeededRandom(config.seed ?? Date.now());
     this.activeWindowCount = config.baseWindowCount;
+    this.nextWindowId = config.baseWindowCount + 1;
     this.initializeWindows();
     this.initializeTrafficPattern();
   }
@@ -594,8 +639,11 @@ export class RealisticBankSimulation {
         breakEndTime: 0,
         breakType: 'none',
         nextWindowBreakTime: this.config.openTime + staggerOffset + this.config.windowBreakInterval,
-        nextToiletBreakTime: this.config.openTime + this.rng.next() * 60,
+        nextToiletBreakTime: this.scheduleNextToiletBreak(this.config.openTime),
+        hasTakenLunch: false,
+        lunchPending: false,
       });
+      this.scheduleLunchBreak(i + 1);
     }
   }
 
@@ -708,6 +756,7 @@ export class RealisticBankSimulation {
         this.activeWindowCount > this.config.baseWindowCount) {
       const idleWindow = this.windows.find(w =>
         w.id > this.config.baseWindowCount &&
+        !w.isOnBreak &&
         w.currentCustomer === null &&
         w.queue.length === 0
       );
@@ -721,9 +770,11 @@ export class RealisticBankSimulation {
    * 添加新窗口
    */
   private addWindow(): void {
+    const windowId = this.nextWindowId++;
     this.activeWindowCount++;
+    const lunchEnd = this.config.lunchStart + this.config.lunchDuration;
     const newWindow: Window = {
-      id: this.activeWindowCount,
+      id: windowId,
       queue: [],
       currentCustomer: null,
       totalServed: 0,
@@ -734,16 +785,21 @@ export class RealisticBankSimulation {
       breakEndTime: 0,
       breakType: 'none',
       nextWindowBreakTime: this.currentTime + this.config.windowBreakInterval,
-      nextToiletBreakTime: this.currentTime + this.rng.next() * 60,
+      nextToiletBreakTime: this.scheduleNextToiletBreak(this.currentTime),
+      hasTakenLunch: !this.config.lunchBreakEnabled || this.currentTime >= lunchEnd,
+      lunchPending: false,
     };
     this.windows.push(newWindow);
+    if (this.config.lunchBreakEnabled && this.currentTime < this.config.lunchStart) {
+      this.scheduleLunchBreak(newWindow.id);
+    }
 
     this.timeline.push({
       time: this.currentTime,
       type: 'start_service',
       customerId: 0,
-      windowId: this.activeWindowCount,
-      description: `窗口${this.activeWindowCount}因客流增加而开放`
+      windowId: newWindow.id,
+      description: `窗口${newWindow.id}因客流增加而开放`
     });
   }
 
@@ -753,7 +809,11 @@ export class RealisticBankSimulation {
   private removeWindow(windowId: number): void {
     const index = this.windows.findIndex(w => w.id === windowId);
     if (index !== -1) {
-      this.windows.splice(index, 1);
+      const [removedWindow] = this.windows.splice(index, 1);
+      if (removedWindow) {
+        this.retiredWindows.push(removedWindow);
+        this.activeWindowCount = Math.max(0, this.activeWindowCount - 1);
+      }
 
       this.timeline.push({
         time: this.currentTime,
@@ -791,19 +851,200 @@ export class RealisticBankSimulation {
   /**
    * 获取空闲窗口
    */
+  private getDispatchableWindows(): Window[] {
+    return this.windows.filter(window => !window.isOnBreak);
+  }
+
+  private canStartBreak(window: Window): boolean {
+    return this.windows.some(other => other.id !== window.id && !other.isOnBreak);
+  }
+
+  private scheduleNextToiletBreak(earliestTime: number): number {
+    if (!this.config.toiletBreakEnabled || this.config.toiletBreakProbability <= 0) {
+      return Infinity;
+    }
+
+    let slotStart = earliestTime;
+    while (slotStart < this.config.closeTime) {
+      if (this.rng.next() < this.config.toiletBreakProbability) {
+        const scheduledTime = slotStart + this.rng.next() * 60;
+        return scheduledTime < this.config.closeTime ? scheduledTime : Infinity;
+      }
+      slotStart += 60;
+    }
+
+    return Infinity;
+  }
+
+  private createSystemCustomer(windowId: number): Customer {
+    return {
+      id: -windowId,
+      arrivalTime: 0,
+      serviceTime: 0,
+      startTime: 0,
+      endTime: 0,
+      windowId,
+      waitTime: 0,
+      status: 'waiting',
+    };
+  }
+
+  private getResultWindows(): Window[] {
+    return [...this.windows, ...this.retiredWindows].sort((a, b) => a.id - b.id);
+  }
+
+  private getEventPriority(type: EventType): number {
+    switch (type) {
+      case 'departure':
+        return 0;
+      case 'break_end':
+        return 1;
+      case 'lunch_start':
+        return 2;
+      case 'arrival':
+      default:
+        return 3;
+    }
+  }
+
+  private sortEvents(): void {
+    this.events.sort((a, b) => {
+      if (a.time !== b.time) {
+        return a.time - b.time;
+      }
+      return this.getEventPriority(a.type) - this.getEventPriority(b.type);
+    });
+  }
+
+  private updateMaxQueueLength(): void {
+    if (this.windows.length === 0) {
+      return;
+    }
+    const currentMaxLength = Math.max(...this.windows.map(w => w.queue.length));
+    if (currentMaxLength > this.maxQueueLength) {
+      this.maxQueueLength = currentMaxLength;
+    }
+  }
+
+  private scheduleLunchBreak(windowId: number): void {
+    if (!this.config.lunchBreakEnabled || this.config.lunchStart >= this.config.closeTime) {
+      return;
+    }
+    this.events.push({
+      type: 'lunch_start',
+      time: this.config.lunchStart,
+      customer: this.createSystemCustomer(windowId),
+      windowId,
+    });
+  }
+
+  private isWithinLunchBreak(time: number = this.currentTime): boolean {
+    const lunchEnd = this.config.lunchStart + this.config.lunchDuration;
+    return this.config.lunchBreakEnabled && time >= this.config.lunchStart && time < lunchEnd;
+  }
+
+  private beginService(window: Window, customer: Customer, fromQueue: boolean): void {
+    customer.windowId = window.id;
+    customer.startTime = Math.max(this.currentTime, customer.arrivalTime);
+    customer.endTime = customer.startTime + customer.serviceTime;
+    customer.waitTime = Math.max(0, customer.startTime - customer.arrivalTime);
+    customer.status = 'serving';
+
+    window.currentCustomer = customer;
+
+    this.events.push({
+      type: 'departure',
+      time: customer.endTime,
+      customer,
+      windowId: window.id,
+    });
+
+    this.timeline.push({
+      time: this.currentTime,
+      type: 'start_service',
+      customerId: customer.id,
+      windowId: window.id,
+      description: fromQueue
+        ? `客户${customer.id}在窗口${window.id}开始办理业务，等待了${customer.waitTime}分钟`
+        : `客户${customer.id}在窗口${window.id}开始办理业务`,
+    });
+  }
+
+  private startQueuedCustomer(window: Window): boolean {
+    const nextCustomer = window.queue.shift();
+    if (!nextCustomer) {
+      window.currentCustomer = null;
+      return false;
+    }
+    this.beginService(window, nextCustomer, true);
+    return true;
+  }
+
+  private tryStartLunchBreak(window: Window): boolean {
+    if (!window.lunchPending || window.isOnBreak || window.hasTakenLunch) {
+      return false;
+    }
+
+    const lunchEnd = this.config.lunchStart + this.config.lunchDuration;
+    if (this.currentTime >= lunchEnd) {
+      window.lunchPending = false;
+      window.hasTakenLunch = true;
+      return false;
+    }
+
+    if (!this.isWithinLunchBreak()) {
+      return false;
+    }
+
+    return this.startWindowBreak(window, 'lunch', lunchEnd - this.currentTime);
+  }
+
+  private tryStartDueBreak(window: Window): boolean {
+    if (this.tryStartLunchBreak(window)) {
+      return true;
+    }
+
+    if (window.isOnBreak || window.currentCustomer !== null || !this.canStartBreak(window)) {
+      return false;
+    }
+
+    if (this.config.windowBreakEnabled && this.currentTime >= window.nextWindowBreakTime) {
+      return this.startWindowBreak(window, 'window', this.config.windowBreakDuration);
+    }
+
+    if (this.config.toiletBreakEnabled && this.currentTime >= window.nextToiletBreakTime) {
+      return this.startWindowBreak(window, 'toilet', this.config.toiletBreakDuration);
+    }
+
+    return false;
+  }
+
+  private handleLunchStart(windowId: number): void {
+    const window = this.windows.find(w => w.id === windowId);
+    if (!window || window.hasTakenLunch) {
+      return;
+    }
+
+    window.lunchPending = true;
+    if (!window.isOnBreak && window.currentCustomer === null) {
+      this.tryStartDueBreak(window);
+    }
+  }
+
   private getIdleWindow(): Window | null {
-    return this.windows.find(w => w.currentCustomer === null) || null;
+    return this.getDispatchableWindows().find(w => w.currentCustomer === null) || null;
   }
 
   /**
    * 获取最短队列窗口
    */
   private getShortestQueueWindow(): Window {
-    if (this.windows.length === 0) {
+    const dispatchableWindows = this.getDispatchableWindows();
+    if (dispatchableWindows.length === 0) {
       throw new Error('没有可用的窗口');
     }
-    let shortest = this.windows[0];
-    for (const window of this.windows) {
+    let shortest = dispatchableWindows[0];
+    for (const window of dispatchableWindows) {
       if (window.queue.length < shortest.queue.length) {
         shortest = window;
       }
@@ -821,31 +1062,7 @@ export class RealisticBankSimulation {
     const idleWindow = this.getIdleWindow();
 
     if (idleWindow) {
-      // 直接服务
-      customer.windowId = idleWindow.id;
-      customer.startTime = Math.max(this.currentTime, customer.arrivalTime);
-      customer.endTime = customer.startTime + customer.serviceTime;
-      customer.waitTime = Math.max(0, customer.startTime - customer.arrivalTime);
-      customer.status = 'serving';
-
-      idleWindow.currentCustomer = customer;
-
-      // 添加离开事件
-      this.events.push({
-        type: 'departure',
-        time: customer.endTime,
-        customer,
-        windowId: idleWindow.id
-      });
-
-      // 记录时间线
-      this.timeline.push({
-        time: this.currentTime,
-        type: 'start_service',
-        customerId: customer.id,
-        windowId: idleWindow.id,
-        description: `客户${customer.id}在窗口${idleWindow.id}开始办理业务`
-      });
+      this.beginService(idleWindow, customer, false);
     } else {
       // 加入最短队列
       const shortestWindow = this.getShortestQueueWindow();
@@ -854,10 +1071,7 @@ export class RealisticBankSimulation {
       shortestWindow.queue.push(customer);
 
       // 更新最大队列长度
-      const currentMaxLength = Math.max(...this.windows.map(w => w.queue.length));
-      if (currentMaxLength > this.maxQueueLength) {
-        this.maxQueueLength = currentMaxLength;
-      }
+      this.updateMaxQueueLength();
 
       // 记录时间线
       this.timeline.push({
@@ -894,34 +1108,15 @@ export class RealisticBankSimulation {
       description: `客户${customer.id}在窗口${window.id}完成业务办理`
     });
 
-    // 处理队列中的下一个客户
+    window.currentCustomer = null;
+
+    if (this.tryStartDueBreak(window)) {
+      return;
+    }
+
     if (window.queue.length > 0) {
-      const nextCustomer = window.queue.shift()!;
-      nextCustomer.startTime = Math.max(this.currentTime, nextCustomer.arrivalTime);
-      nextCustomer.endTime = nextCustomer.startTime + nextCustomer.serviceTime;
-      nextCustomer.waitTime = Math.max(0, nextCustomer.startTime - nextCustomer.arrivalTime);
-      nextCustomer.status = 'serving';
-
-      window.currentCustomer = nextCustomer;
-
-      // 添加离开事件
-      this.events.push({
-        type: 'departure',
-        time: nextCustomer.endTime,
-        customer: nextCustomer,
-        windowId: window.id
-      });
-
-      // 记录时间线
-      this.timeline.push({
-        time: this.currentTime,
-        type: 'start_service',
-        customerId: nextCustomer.id,
-        windowId: window.id,
-        description: `客户${nextCustomer.id}在窗口${window.id}开始办理业务，等待了${nextCustomer.waitTime}分钟`
-      });
+      this.startQueuedCustomer(window);
     } else {
-      window.currentCustomer = null;
       // 尝试收缩窗口
       this.manageElasticWindows();
     }
@@ -932,37 +1127,46 @@ export class RealisticBankSimulation {
    */
   private processWindowBreaks(): void {
     for (const window of this.windows) {
-      if (window.isOnBreak) continue;
-      if (this.config.windowBreakEnabled &&
-          this.currentTime >= window.nextWindowBreakTime &&
-          window.currentCustomer === null) {
-        this.startWindowBreak(window, 'window', this.config.windowBreakDuration);
-        continue;
-      }
-      if (this.config.toiletBreakEnabled &&
-          this.currentTime >= window.nextToiletBreakTime &&
-          window.currentCustomer === null) {
-        this.startWindowBreak(window, 'toilet', this.config.toiletBreakDuration);
-      }
+      this.tryStartDueBreak(window);
     }
   }
 
-  private startWindowBreak(window: Window, type: 'lunch' | 'window' | 'toilet', duration: number): void {
+  private startWindowBreak(window: Window, type: 'lunch' | 'window' | 'toilet', duration: number): boolean {
+    if (duration <= 0) {
+      if (type === 'lunch') {
+        window.hasTakenLunch = true;
+        window.lunchPending = false;
+      }
+      return false;
+    }
+
     window.isOnBreak = true;
     window.breakType = type;
     window.breakEndTime = this.currentTime + duration;
+    if (type === 'lunch') {
+      window.hasTakenLunch = true;
+      window.lunchPending = false;
+    }
     const typeLabel = type === 'lunch' ? '午休' : type === 'window' ? '轮休' : '如厕';
     this.timeline.push({ time: this.currentTime, type: 'start_service', customerId: 0, windowId: window.id, description: `窗口${window.id}开始${typeLabel}（${duration}分钟），队列客户转移` });
     while (window.queue.length > 0) {
       const c = window.queue.shift()!;
-      const others = this.windows.filter(w => w.id !== window.id && !w.isOnBreak);
+      const others = this.getDispatchableWindows().filter(w => w.id !== window.id);
       if (others.length === 0) { window.queue.unshift(c); break; }
+      const idleTarget = others.find(w => w.currentCustomer === null && w.queue.length === 0);
+      if (idleTarget) {
+        this.beginService(idleTarget, c, true);
+        continue;
+      }
       const target = others.reduce((a, b) => a.queue.length <= b.queue.length ? a : b);
       c.windowId = target.id;
+      c.status = 'waiting';
       target.queue.push(c);
+      this.updateMaxQueueLength();
     }
-    const dummy: Customer = { id: -window.id, arrivalTime: 0, serviceTime: 0, startTime: 0, endTime: 0, windowId: window.id, waitTime: 0, status: 'waiting' };
-    this.events.push({ type: 'break_end', time: window.breakEndTime, customer: dummy, windowId: window.id });
+    this.updateMaxQueueLength();
+    this.events.push({ type: 'break_end', time: window.breakEndTime, customer: this.createSystemCustomer(window.id), windowId: window.id });
+    return true;
   }
 
   private processBreakEnd(windowId: number): void {
@@ -972,16 +1176,12 @@ export class RealisticBankSimulation {
     window.isOnBreak = false;
     window.breakType = 'none';
     if (this.config.windowBreakEnabled) window.nextWindowBreakTime = this.currentTime + this.config.windowBreakInterval;
-    if (this.config.toiletBreakEnabled) window.nextToiletBreakTime = this.currentTime + 30 + this.rng.next() * 60;
+    window.nextToiletBreakTime = this.scheduleNextToiletBreak(this.currentTime + 30);
     this.timeline.push({ time: this.currentTime, type: 'end_service', customerId: 0, windowId: window.id, description: `窗口${window.id}${typeLabel}结束，恢复服务` });
     if (window.queue.length > 0) {
-      const next = window.queue.shift()!;
-      next.startTime = Math.max(this.currentTime, next.arrivalTime);
-      next.endTime = next.startTime + next.serviceTime;
-      next.waitTime = Math.max(0, next.startTime - next.arrivalTime);
-      next.status = 'serving';
-      window.currentCustomer = next;
-      this.events.push({ type: 'departure', time: next.endTime, customer: next, windowId: window.id });
+      this.startQueuedCustomer(window);
+    } else {
+      window.currentCustomer = null;
     }
   }
 
@@ -992,11 +1192,9 @@ export class RealisticBankSimulation {
     // 生成客户到达
     this.generateArrivals();
 
-    // 按时间排序事件
-    this.events.sort((a, b) => a.time - b.time);
-
     // 处理事件
     while (this.events.length > 0) {
+      this.sortEvents();
       const event = this.events.shift()!;
       this.currentTime = event.time;
 
@@ -1009,6 +1207,8 @@ export class RealisticBankSimulation {
         this.processDeparture(event.windowId);
       } else if (event.type === 'break_end' && event.windowId) {
         this.processBreakEnd(event.windowId);
+      } else if (event.type === 'lunch_start' && event.windowId) {
+        this.handleLunchStart(event.windowId);
       }
     }
 
@@ -1025,14 +1225,18 @@ export class RealisticBankSimulation {
       ? Math.max(...completedCustomers.map(c => c.endTime))
       : 0;
 
-    const windowUtilization = this.windows.map(w => {
+    const resultWindows = this.getResultWindows();
+    resultWindows.forEach(w => {
+      w.idleTime = Math.max(0, totalSimulationTime - w.totalServiceTime);
+    });
+    const windowUtilization = resultWindows.map(w => {
       if (totalSimulationTime === 0) return 0;
       return Math.min(w.totalServiceTime / totalSimulationTime, 1);
     });
 
     return {
       customers: this.customers,
-      windows: this.windows,
+      windows: resultWindows,
       statistics: {
         totalCustomers: this.customers.length,
         avgWaitTime: completedCustomers.length > 0 ? totalWaitTime / completedCustomers.length : 0,
@@ -1067,33 +1271,138 @@ export class RealisticBankSimulation {
 /**
  * 验证银行配置
  */
-export function validateConfig(config: BankConfig): ValidationResult {
+export function validateConfig(config: unknown): ValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];
 
-  if (config.baseWindowCount < 1) {
-    errors.push('基础窗口数量必须大于0');
+  if (!isRecord(config)) {
+    return {
+      isValid: false,
+      errors: ['银行配置必须是对象'],
+      warnings,
+    };
   }
-  if (config.maxWindowCount < config.baseWindowCount) {
+
+  const {
+    baseWindowCount,
+    maxWindowCount,
+    elasticThreshold,
+    openTime,
+    closeTime,
+    lunchBreakEnabled,
+    lunchStart,
+    lunchDuration,
+    baseArrivalRate,
+    peakHoursMultiplier,
+    peakHoursStart,
+    peakHoursEnd,
+    avgServiceTime,
+    serviceTimeStdDev,
+    isPensionDay,
+    pensionDayMultiplier,
+    elderlyRatio,
+    windowBreakEnabled,
+    windowBreakInterval,
+    windowBreakDuration,
+    toiletBreakEnabled,
+    toiletBreakProbability,
+    toiletBreakDuration,
+  } = config;
+
+  if (!isPositiveInteger(baseWindowCount)) {
+    errors.push('基础窗口数量必须为正整数');
+  }
+  if (!isPositiveInteger(maxWindowCount)) {
+    errors.push('最大窗口数量必须为正整数');
+  }
+  if (isPositiveInteger(baseWindowCount) && isPositiveInteger(maxWindowCount) && maxWindowCount < baseWindowCount) {
     errors.push('最大窗口数不能小于基础窗口数');
   }
-  if (config.openTime < 0) {
-    errors.push('开门时间不能为负');
+  if (isPositiveInteger(baseWindowCount) && baseWindowCount > 10) {
+    errors.push('基础窗口数量不能超过10个');
   }
-  if (config.closeTime <= config.openTime) {
+  if (isPositiveInteger(maxWindowCount) && maxWindowCount > 10) {
+    errors.push('最大窗口数量不能超过10个');
+  }
+  if (!isFiniteNumber(openTime) || openTime < 0) {
+    errors.push('开门时间必须为非负数');
+  }
+  if (!isFiniteNumber(closeTime)) {
+    errors.push('关门时间必须为有效数字');
+  } else if (isFiniteNumber(openTime) && closeTime <= openTime) {
     errors.push('关门时间必须晚于开门时间');
   }
-  if (config.avgServiceTime <= 0) {
+  if (!isFiniteNumber(avgServiceTime) || avgServiceTime <= 0) {
     errors.push('平均服务时间必须大于0');
   }
-  if (config.baseArrivalRate <= 0) {
+  if (!isFiniteNumber(serviceTimeStdDev) || serviceTimeStdDev < 0) {
+    errors.push('服务时间标准差必须为非负数');
+  }
+  if (!isFiniteNumber(baseArrivalRate) || baseArrivalRate <= 0) {
     errors.push('基础到达率必须大于0');
+  } else if (baseArrivalRate > 10) {
+    warnings.push('基础到达率过高，可能导致极端拥堵');
   }
-  if (config.elasticThreshold < 1) {
-    warnings.push('弹性扩展阈值过小，可能导致频繁开关窗口');
+  if (!isFiniteNumber(peakHoursMultiplier) || peakHoursMultiplier <= 0) {
+    errors.push('高峰时段倍率必须大于0');
   }
-  if (config.isPensionDay && config.pensionDayMultiplier > 6) {
+  if (!isFiniteNumber(peakHoursStart) || !isFiniteNumber(peakHoursEnd)) {
+    errors.push('高峰时段必须为有效数字');
+  } else if (peakHoursEnd <= peakHoursStart) {
+    errors.push('高峰结束时间必须晚于高峰开始时间');
+  }
+  if (!isFiniteNumber(elasticThreshold) || elasticThreshold < 1) {
+    errors.push('弹性扩展阈值必须大于等于1');
+  }
+  if (!isBoolean(lunchBreakEnabled)) {
+    errors.push('午休开关必须为布尔值');
+  }
+  if (!isBoolean(windowBreakEnabled)) {
+    errors.push('窗口轮休开关必须为布尔值');
+  }
+  if (!isBoolean(toiletBreakEnabled)) {
+    errors.push('如厕开关必须为布尔值');
+  }
+  if (!isBoolean(isPensionDay)) {
+    errors.push('养老金日开关必须为布尔值');
+  }
+  if (!isFiniteNumber(elderlyRatio) || elderlyRatio < 0 || elderlyRatio > 1) {
+    errors.push('老年客户比例必须在0到1之间');
+  }
+  if (!isFiniteNumber(pensionDayMultiplier) || pensionDayMultiplier <= 0) {
+    errors.push('养老金日流量倍数必须大于0');
+  } else if (isPensionDay === true && pensionDayMultiplier > 6) {
     warnings.push('养老金日流量倍数过高，可能导致极端拥堵');
+  }
+  if (lunchBreakEnabled === true) {
+    if (!isFiniteNumber(lunchStart)) {
+      errors.push('午休开始时间必须为有效数字');
+    }
+    if (!isFiniteNumber(lunchDuration) || lunchDuration <= 0) {
+      errors.push('午休时长必须大于0');
+    }
+    if (isFiniteNumber(openTime) && isFiniteNumber(closeTime) && isFiniteNumber(lunchStart) && isFiniteNumber(lunchDuration) && lunchStart + lunchDuration > closeTime) {
+      errors.push('午休时段不能超过营业时间');
+    }
+  }
+  if (windowBreakEnabled === true) {
+    if (!isFiniteNumber(windowBreakInterval) || windowBreakInterval <= 0) {
+      errors.push('窗口轮休间隔必须大于0');
+    }
+    if (!isFiniteNumber(windowBreakDuration) || windowBreakDuration <= 0) {
+      errors.push('窗口轮休时长必须大于0');
+    }
+    if (isFiniteNumber(windowBreakInterval) && isFiniteNumber(windowBreakDuration) && windowBreakDuration >= windowBreakInterval) {
+      errors.push('窗口轮休时长必须小于轮休间隔');
+    }
+  }
+  if (toiletBreakEnabled === true) {
+    if (!isFiniteNumber(toiletBreakProbability) || toiletBreakProbability < 0 || toiletBreakProbability > 1) {
+      errors.push('如厕概率必须在0到1之间');
+    }
+    if (!isFiniteNumber(toiletBreakDuration) || toiletBreakDuration <= 0) {
+      errors.push('如厕时长必须大于0');
+    }
   }
 
   return { isValid: errors.length === 0, errors, warnings };

@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useCallback, useRef, useEffect } from 'react';
-import { formatTime } from '@/lib/bank-simulation';
+import { useState, useCallback } from 'react';
+import { formatTime, validateConfig, validateInput, type BankConfig, type SimulationInput, type ValidationResult } from '@/lib/bank-simulation';
 import dynamic from 'next/dynamic';
 
 const P5QueueVisualization = dynamic(() => import('@/components/P5QueueVisualization'), { ssr: false });
@@ -55,15 +55,88 @@ interface SimulationResult {
   timeline: TimelineEvent[];
 }
 
-interface ValidationResult {
-  isValid: boolean;
-  errors: string[];
-  warnings: string[];
-}
-
 interface CustomerInput {
   arrivalTime: string;
   serviceTime: string;
+}
+
+interface RealisticSimulationForm {
+  closeTime: number;
+  avgServiceTime: number;
+  lunchBreakEnabled: boolean;
+  lunchStart: number;
+  lunchDuration: number;
+  windowBreakEnabled: boolean;
+  windowBreakInterval: number;
+  windowBreakDuration: number;
+  toiletBreakEnabled: boolean;
+  toiletBreakProbability: number;
+  toiletBreakDuration: number;
+}
+
+function parseNumericField(value: string): number {
+  const trimmed = value.trim();
+  if (trimmed === '') {
+    return Number.NaN;
+  }
+
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : Number.NaN;
+}
+
+function buildSimulationInput(customers: CustomerInput[], windowCount: number): SimulationInput {
+  return {
+    windowCount,
+    customers: customers.map((customer) => ({
+      arrivalTime: parseNumericField(customer.arrivalTime),
+      serviceTime: parseNumericField(customer.serviceTime),
+    })),
+  };
+}
+
+function buildSimulationInputFromResult(result: SimulationResult, windowCount: number): SimulationInput {
+  return {
+    windowCount,
+    customers: result.customers.map((customer) => ({
+      arrivalTime: customer.arrivalTime,
+      serviceTime: customer.serviceTime,
+    })),
+  };
+}
+
+function buildRealisticConfig(bankConfig: RealisticSimulationForm, windowCount: number): BankConfig {
+  const totalDuration = bankConfig.closeTime * (bankConfig.avgServiceTime * 0.8 + 2);
+
+  return {
+    baseWindowCount: windowCount,
+    maxWindowCount: Math.min(10, windowCount + 2),
+    elasticThreshold: 5,
+    openTime: 0,
+    closeTime: totalDuration,
+    lunchBreakEnabled: bankConfig.lunchBreakEnabled,
+    lunchStart: bankConfig.lunchStart,
+    lunchDuration: bankConfig.lunchDuration,
+    baseArrivalRate: bankConfig.closeTime / totalDuration,
+    peakHoursMultiplier: 1.5,
+    peakHoursStart: totalDuration * 0.2,
+    peakHoursEnd: totalDuration * 0.5,
+    avgServiceTime: bankConfig.avgServiceTime,
+    serviceTimeStdDev: bankConfig.avgServiceTime * 0.3,
+    isPensionDay: false,
+    pensionDayMultiplier: 3,
+    elderlyRatio: 0.3,
+    windowBreakEnabled: bankConfig.windowBreakEnabled,
+    windowBreakInterval: bankConfig.windowBreakInterval,
+    windowBreakDuration: bankConfig.windowBreakDuration,
+    toiletBreakEnabled: bankConfig.toiletBreakEnabled,
+    toiletBreakProbability: bankConfig.toiletBreakProbability,
+    toiletBreakDuration: bankConfig.toiletBreakDuration,
+    seed: Date.now(),
+  };
+}
+
+function getValidationErrorMessage(validation: ValidationResult, fallback: string): string {
+  return validation.errors[0] || fallback;
 }
 
 export default function BankSimulationPage() {
@@ -75,13 +148,14 @@ export default function BankSimulationPage() {
   ]);
   const [result, setResult] = useState<SimulationResult | null>(null);
   const [validation, setValidation] = useState<ValidationResult | null>(null);
+  const [lastSimulationInput, setLastSimulationInput] = useState<SimulationInput | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'input' | 'result' | 'timeline' | 'dynamic'>('input');
   const [error, setError] = useState<string | null>(null);
   const [windowCount, setWindowCount] = useState(4);
 
   // 随机模拟配置
-  const [bankConfig, setBankConfig] = useState({
+  const [bankConfig, setBankConfig] = useState<RealisticSimulationForm>({
     closeTime: 50,          // 客户数量
     avgServiceTime: 5,      // 平均服务时间
     // 真实情况参数
@@ -141,39 +215,53 @@ export default function BankSimulationPage() {
 
       if (!testData.success) {
         setError('加载测试数据失败');
-        setLoading(false);
         return;
       }
 
       // 更新界面数据
-      setCustomers(testData.testData.customers.map((c: { arrivalTime: number; serviceTime: number }) => ({
+      const simulationInput: SimulationInput = {
+        windowCount: testData.testData.windowCount,
+        customers: testData.testData.customers.map((c: { arrivalTime: number; serviceTime: number }) => ({
+          arrivalTime: c.arrivalTime,
+          serviceTime: c.serviceTime,
+        })),
+      };
+      const localValidation = validateInput(simulationInput);
+
+      setWindowCount(simulationInput.windowCount);
+      setCustomers(simulationInput.customers.map((c) => ({
         arrivalTime: c.arrivalTime.toString(),
         serviceTime: c.serviceTime.toString(),
       })));
-      setValidation(testData.validation);
+      setValidation(localValidation);
 
       // 2. 如果数据合法，自动运行模拟
-      if (testData.validation.isValid) {
+      if (!localValidation.isValid) {
+        setError(getValidationErrorMessage(localValidation, '测试数据验证失败'));
+        return;
+      }
+
+      if (localValidation.isValid) {
         const simResponse = await fetch('/api/simulation', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             action: 'simulate',
-            data: {
-              windowCount: windowCount,
-              customers: testData.testData.customers,
-            },
+            data: simulationInput,
           }),
         });
         const simData = await simResponse.json();
 
         if (simData.success) {
           setResult(simData.result);
+          setLastSimulationInput(simulationInput);
           setComparisonResults(null);
           setResultCurrentTime(0);
           setResultIsPlaying(false);
+          setValidation(simData.validation ?? localValidation);
           setActiveTab('result');
         } else {
+          setValidation(simData.validation ?? localValidation);
           setError(simData.error || '模拟失败');
         }
       }
@@ -191,20 +279,21 @@ export default function BankSimulationPage() {
     setValidation(null);
 
     try {
-      const customerData = customers.map(c => ({
-        arrivalTime: parseFloat(c.arrivalTime) || 0,
-        serviceTime: parseFloat(c.serviceTime) || 0,
-      }));
+      const simulationInput = buildSimulationInput(customers, windowCount);
+      const localValidation = validateInput(simulationInput);
+      setValidation(localValidation);
+
+      if (!localValidation.isValid) {
+        setError(getValidationErrorMessage(localValidation, '输入数据验证失败'));
+        return;
+      }
 
       const response = await fetch('/api/simulation', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'simulate',
-          data: {
-            windowCount: windowCount,
-            customers: customerData,
-          },
+          data: simulationInput,
         }),
       });
 
@@ -212,13 +301,14 @@ export default function BankSimulationPage() {
 
       if (data.success) {
         setResult(data.result);
+        setLastSimulationInput(simulationInput);
         setComparisonResults(null);
         setResultCurrentTime(0);
         setResultIsPlaying(false);
-        setValidation(data.validation);
+        setValidation(data.validation ?? localValidation);
         setActiveTab('result');
       } else {
-        setValidation(data.validation);
+        setValidation(data.validation ?? localValidation);
         setError(data.error || '模拟失败');
       }
     } catch {
@@ -233,6 +323,8 @@ export default function BankSimulationPage() {
     setCustomers([{ arrivalTime: '', serviceTime: '' }]);
     setResult(null);
     setValidation(null);
+    setLastSimulationInput(null);
+    setComparisonResults(null);
     setError(null);
     setActiveTab('input');
   }, []);
@@ -241,34 +333,16 @@ export default function BankSimulationPage() {
   const runRealisticSimulation = useCallback(async () => {
     setLoading(true);
     setError(null);
+    setValidation(null);
     try {
-      const totalDuration = bankConfig.closeTime * (bankConfig.avgServiceTime * 0.8 + 2);
-      const config = {
-        baseWindowCount: 4,
-        maxWindowCount: 6,
-        elasticThreshold: 5,
-        openTime: 0,
-        closeTime: totalDuration,
-        lunchBreakEnabled: bankConfig.lunchBreakEnabled,
-        lunchStart: bankConfig.lunchStart,
-        lunchDuration: bankConfig.lunchDuration,
-        baseArrivalRate: bankConfig.closeTime / totalDuration,
-        peakHoursMultiplier: 1.5,
-        peakHoursStart: totalDuration * 0.2,
-        peakHoursEnd: totalDuration * 0.5,
-        avgServiceTime: bankConfig.avgServiceTime,
-        serviceTimeStdDev: bankConfig.avgServiceTime * 0.3,
-        isPensionDay: false,
-        pensionDayMultiplier: 3,
-        elderlyRatio: 0.3,
-        windowBreakEnabled: bankConfig.windowBreakEnabled,
-        windowBreakInterval: bankConfig.windowBreakInterval,
-        windowBreakDuration: bankConfig.windowBreakDuration,
-        toiletBreakEnabled: bankConfig.toiletBreakEnabled,
-        toiletBreakProbability: bankConfig.toiletBreakProbability,
-        toiletBreakDuration: bankConfig.toiletBreakDuration,
-        seed: Date.now(),
-      };
+      const config = buildRealisticConfig(bankConfig, windowCount);
+      const localValidation = validateConfig(config);
+      setValidation(localValidation);
+
+      if (!localValidation.isValid) {
+        setError(getValidationErrorMessage(localValidation, '随机模拟参数验证失败'));
+        return;
+      }
       const response = await fetch('/api/simulation', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -277,11 +351,14 @@ export default function BankSimulationPage() {
       const data = await response.json();
       if (data.success) {
         setResult(data.result);
+        setLastSimulationInput(buildSimulationInputFromResult(data.result, config.baseWindowCount));
         setComparisonResults(null);
         setResultCurrentTime(0);
         setResultIsPlaying(false);
+        setValidation(data.validation ?? localValidation);
         setActiveTab('dynamic');
       } else {
+        setValidation(data.validation ?? localValidation);
         setError(data.error || '模拟失败');
       }
     } catch {
@@ -289,35 +366,45 @@ export default function BankSimulationPage() {
     } finally {
       setLoading(false);
     }
-  }, [bankConfig]);
+  }, [bankConfig, windowCount]);
 
   // 对比三种调度算法
   const runComparison = useCallback(async () => {
-    if (!result) return;
-    setComparisonLoading(true);
-    try {
-      // 为了使对比更有意义（产生排队压力），如果当前输入客户太少，则随机生成30个客户进行对比
-      let customerData = customers.map(c => ({
-        arrivalTime: parseFloat(c.arrivalTime) || 0,
-        serviceTime: parseFloat(c.serviceTime) || 0,
-      }));
+    if (!lastSimulationInput) {
+      setError('请先运行一次有效模拟');
+      return;
+    }
 
-      if (customerData.length < 10) {
-        customerData = Array.from({ length: 30 }, (_, i) => ({
-          arrivalTime: i * 2 + Math.random() * 2,
-          serviceTime: 5 + Math.random() * 10
-        }));
+    setComparisonLoading(true);
+    setError(null);
+    try {
+      // 使用最近一次成功模拟的原始输入做算法对比，避免混入未提交或自动生成的数据
+      const comparisonInput: SimulationInput = {
+        windowCount: lastSimulationInput.windowCount,
+        customers: lastSimulationInput.customers.map((customer) => ({
+          arrivalTime: customer.arrivalTime,
+          serviceTime: customer.serviceTime,
+        })),
+      };
+      const localValidation = validateInput(comparisonInput);
+      setValidation(localValidation);
+
+      if (!localValidation.isValid) {
+        setError(getValidationErrorMessage(localValidation, '对比数据验证失败'));
+        return;
       }
 
       const response = await fetch('/api/simulation', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'compareAlgorithms', data: { windowCount, customers: customerData } }),
+        body: JSON.stringify({ action: 'compareAlgorithms', data: comparisonInput }),
       });
       const data = await response.json();
       if (data.success) {
         setComparisonResults(data.results);
+        setValidation(data.validation ?? localValidation);
       } else {
+        setValidation(data.validation ?? localValidation);
         setError(data.error || '对比失败');
       }
     } catch {
@@ -325,7 +412,7 @@ export default function BankSimulationPage() {
     } finally {
       setComparisonLoading(false);
     }
-  }, [result, customers, windowCount]);
+  }, [lastSimulationInput]);
 
   return (
     <div className="min-h-screen p-4 md:p-8">
@@ -829,7 +916,7 @@ export default function BankSimulationPage() {
                       <div className="flex justify-between">
                         <span className="text-gray-700">已服务客户</span>
                         <span className="font-semibold text-gray-700">
-                          {result.customers.filter(c => c.windowId === window.id && c.endTime <= resultCurrentTime).length} 人
+                          {window.totalServed} 人
                         </span>
                       </div>
                       <div className="flex justify-between">

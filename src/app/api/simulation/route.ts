@@ -11,6 +11,20 @@ import {
   generateTestData
 } from '@/lib/bank-simulation';
 
+function cloneSimulationInput(data: SimulationInput): SimulationInput {
+  return {
+    windowCount: data.windowCount,
+    customers: data.customers.map((customer) => ({
+      arrivalTime: customer.arrivalTime,
+      serviceTime: customer.serviceTime,
+    })),
+  };
+}
+
+function cloneBankConfig(data: BankConfig): BankConfig {
+  return { ...data };
+}
+
 export async function POST(request: NextRequest) {
   try {
     let body;
@@ -66,7 +80,7 @@ export async function POST(request: NextRequest) {
 /**
  * 处理模拟请求
  */
-function handleSimulation(data: SimulationInput) {
+function handleSimulation(data: unknown) {
   // 验证输入
   const validation = validateInput(data);
   if (!validation.isValid) {
@@ -80,11 +94,13 @@ function handleSimulation(data: SimulationInput) {
     );
   }
 
+  const simulationInput = cloneSimulationInput(data as SimulationInput);
+
   // 创建模拟实例
-  const simulation = new BankSimulation(data.windowCount);
+  const simulation = new BankSimulation(simulationInput.windowCount);
 
   // 添加客户
-  for (const customer of data.customers) {
+  for (const customer of simulationInput.customers) {
     simulation.addCustomer(customer.arrivalTime, customer.serviceTime);
   }
 
@@ -101,7 +117,7 @@ function handleSimulation(data: SimulationInput) {
 /**
  * 处理真实场景模拟请求
  */
-function handleRealisticSimulation(data: BankConfig) {
+function handleRealisticSimulation(data: unknown) {
   // 验证配置
   const validation = validateConfig(data);
   if (!validation.isValid) {
@@ -115,8 +131,10 @@ function handleRealisticSimulation(data: BankConfig) {
     );
   }
 
+  const config = cloneBankConfig(data as BankConfig);
+
   // 创建真实模拟实例
-  const simulation = new RealisticBankSimulation(data);
+  const simulation = new RealisticBankSimulation(config);
 
   // 运行模拟
   const result = simulation.run();
@@ -124,7 +142,7 @@ function handleRealisticSimulation(data: BankConfig) {
   return NextResponse.json({
     success: true,
     result,
-    config: data,
+    config,
     validation
   });
 }
@@ -132,7 +150,7 @@ function handleRealisticSimulation(data: BankConfig) {
 /**
  * 处理验证请求
  */
-function handleValidation(data: SimulationInput) {
+function handleValidation(data: unknown) {
   const validation = validateInput(data);
   return NextResponse.json({
     success: true,
@@ -157,30 +175,33 @@ function handleTestData(data: { type: 'valid' | 'invalid_all' | 'invalid_partial
 /**
  * 对比三种调度算法（使用相同输入数据）
  */
-function handleCompareAlgorithms(data: SimulationInput) {
-  // 为了对比更有意义，如果客户太少，生成高压力数据
-  let finalCustomers = data.customers;
-  if (finalCustomers.length < 10) {
-    const testData = generateTestData('valid');
-    // 增加密度：将 10 个客户扩展为 100 个极高频客户，强制产生排队压力
-    finalCustomers = Array.from({ length: 100 }, (_, i) => ({
-      arrivalTime: i * 0.6 + Math.random() * 0.4,
-      serviceTime: 10 + Math.random() * 15
-    }));
+function handleCompareAlgorithms(data: unknown) {
+  const validation = validateInput(data);
+  if (!validation.isValid) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: '输入数据验证失败',
+        validation
+      },
+      { status: 400 }
+    );
   }
 
+  const simulationInput = cloneSimulationInput(data as SimulationInput);
+
   const algorithms = [
-    { algorithmName: 'SQF（最短队列优先）', sim: new BankSimulation(data.windowCount) },
-    { algorithmName: 'RR（轮询分配）', sim: new RoundRobinSimulation(data.windowCount) },
-    { algorithmName: 'LEW（最短预期等待）', sim: new LeastExpectedWaitSimulation(data.windowCount) },
+    { algorithmName: 'SQF（最短队列优先）', sim: new BankSimulation(simulationInput.windowCount) },
+    { algorithmName: 'RR（轮询分配）', sim: new RoundRobinSimulation(simulationInput.windowCount) },
+    { algorithmName: 'LEW（最短预期等待）', sim: new LeastExpectedWaitSimulation(simulationInput.windowCount) },
   ];
 
   const results = algorithms.map(({ algorithmName, sim }) => {
-    finalCustomers.forEach(c => sim.addCustomer(c.arrivalTime, c.serviceTime));
+    simulationInput.customers.forEach(c => sim.addCustomer(c.arrivalTime, c.serviceTime));
     return { algorithmName, result: sim.run() };
   });
 
-  return NextResponse.json({ success: true, results });
+  return NextResponse.json({ success: true, results, validation });
 }
 
 export async function GET() {
@@ -188,7 +209,7 @@ export async function GET() {
     message: '银行业务模拟API',
     endpoints: {
       'POST /api/simulation': {
-        actions: ['simulate', 'realistic', 'validate', 'testData'],
+        actions: ['simulate', 'realistic', 'validate', 'testData', 'compareAlgorithms'],
         description: '执行模拟、真实场景模拟、验证数据或获取测试数据'
       }
     }

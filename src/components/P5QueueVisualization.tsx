@@ -119,7 +119,7 @@ export default function P5QueueVisualization({
         let lastInternalTime = -1;
 
         // Layout computed from window count
-        let WIN_COUNT = simRef.current.windows.length || 4;
+        let WIN_COUNT = Math.max(simRef.current.windows.length || 4, 1);
         let WIN_W = Math.min(130, Math.floor((W - 80) / WIN_COUNT) - 20);
         const WIN_H = 130;
         let SPACING = (W - WIN_COUNT * WIN_W) / (WIN_COUNT + 1);
@@ -162,18 +162,44 @@ export default function P5QueueVisualization({
           return [b0 * x0 + b1 * x1 + b2 * x2 + b3 * x3, b0 * y0 + b1 * y1 + b2 * y2 + b3 * y3];
         }
 
+        function roundedRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number) {
+          const safeRadius = Math.max(0, Math.min(radius, width / 2, height / 2));
+
+          ctx.beginPath();
+          if (typeof ctx.roundRect === 'function') {
+            ctx.roundRect(x, y, width, height, safeRadius);
+            return;
+          }
+
+          ctx.moveTo(x + safeRadius, y);
+          ctx.lineTo(x + width - safeRadius, y);
+          ctx.quadraticCurveTo(x + width, y, x + width, y + safeRadius);
+          ctx.lineTo(x + width, y + height - safeRadius);
+          ctx.quadraticCurveTo(x + width, y + height, x + width - safeRadius, y + height);
+          ctx.lineTo(x + safeRadius, y + height);
+          ctx.quadraticCurveTo(x, y + height, x, y + height - safeRadius);
+          ctx.lineTo(x, y + safeRadius);
+          ctx.quadraticCurveTo(x, y, x + safeRadius, y);
+          ctx.closePath();
+        }
+
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         let bgBuffer: any = null;
 
-        p.setup = () => {
-          p.createCanvas(W, H);
-          p.frameRate(24);
-          p.colorMode(p.RGB, 255, 255, 255, 1);
-          p.textFont('sans-serif');
+        function syncLayout(windowCount: number) {
+          WIN_COUNT = Math.max(windowCount, 1);
+          WIN_W = Math.min(130, Math.floor((W - 80) / WIN_COUNT) - 20);
+          SPACING = (W - WIN_COUNT * WIN_W) / (WIN_COUNT + 1);
+        }
 
-          // Pre-render static background into offscreen buffer
-          bgBuffer = p.createGraphics(W, H);
+        function initBg() {
+          if (!bgBuffer) {
+            bgBuffer = p.createGraphics(W, H);
+          }
+
           bgBuffer.background(18, 22, 36);
+          bgBuffer.colorMode(p.RGB, 255, 255, 255, 1);
+
           // marble floor tiles
           bgBuffer.noStroke();
           for (let row = 0; row < 4; row++) {
@@ -185,21 +211,29 @@ export default function P5QueueVisualization({
               bgBuffer.rect(tx2, ty2, 149, 29);
             }
           }
+
           // grid lines
           bgBuffer.stroke(40, 48, 72, 0.4);
           bgBuffer.strokeWeight(1);
           for (let gx = 0; gx < W; gx += 80) bgBuffer.line(gx, 0, gx, WIN_Y);
           for (let gy = 40; gy < WIN_Y; gy += 60) bgBuffer.line(0, gy, W, gy);
           bgBuffer.noStroke();
+        }
+
+        p.setup = () => {
+          p.createCanvas(W, H);
+          p.frameRate(24);
+          p.colorMode(p.RGB, 255, 255, 255, 1);
+          p.textFont('sans-serif');
+          syncLayout(WIN_COUNT);
+          initBg();
         };
 
         p.draw = () => {
           // --- detect layout change ---
           const currentWinCount = simRef.current.windows.length;
           if (currentWinCount !== WIN_COUNT) {
-            WIN_COUNT = currentWinCount;
-            WIN_W = Math.min(130, Math.floor((W - 80) / WIN_COUNT) - 20);
-            SPACING = (W - WIN_COUNT * WIN_W) / (WIN_COUNT + 1);
+            syncLayout(currentWinCount);
             initBg();
           }
 
@@ -316,7 +350,9 @@ export default function P5QueueVisualization({
           });
 
           // --- BACKGROUND: blit pre-rendered buffer ---
-          p.image(bgBuffer, 0, 0);
+          if (bgBuffer) {
+            p.image(bgBuffer, 0, 0);
+          }
 
           // 绘制门口标签
           p.noStroke();
@@ -461,8 +497,7 @@ export default function P5QueueVisualization({
               wg.addColorStop(0, '#1e293b'); wg.addColorStop(1, '#0f172a');
             }
             dctx.fillStyle = wg;
-            dctx.beginPath();
-            dctx.roundRect(wx2, wy, WIN_W, WIN_H, 10);
+            roundedRectPath(dctx, wx2, wy, WIN_W, WIN_H, 10);
             dctx.fill();
             dctx.restore();
             p.noStroke();
@@ -678,8 +713,6 @@ export default function P5QueueVisualization({
     </div>
   );
 }
-
-
 
 
 
