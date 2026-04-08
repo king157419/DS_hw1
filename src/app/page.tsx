@@ -61,7 +61,7 @@ interface CustomerInput {
 }
 
 interface RealisticSimulationForm {
-  closeTime: number;
+  customersPerHour: number;
   avgServiceTime: number;
   lunchBreakEnabled: boolean;
   lunchStart: number;
@@ -73,6 +73,9 @@ interface RealisticSimulationForm {
   toiletBreakProbability: number;
   toiletBreakDuration: number;
 }
+
+const BUSINESS_DURATION_MINUTES = 480;
+const BUSINESS_DURATION_HOURS = BUSINESS_DURATION_MINUTES / 60;
 
 function parseNumericField(value: string): number {
   const trimmed = value.trim();
@@ -105,21 +108,19 @@ function buildSimulationInputFromResult(result: SimulationResult, windowCount: n
 }
 
 function buildRealisticConfig(bankConfig: RealisticSimulationForm, windowCount: number): BankConfig {
-  const totalDuration = bankConfig.closeTime * (bankConfig.avgServiceTime * 0.8 + 2);
-
   return {
     baseWindowCount: windowCount,
     maxWindowCount: Math.min(10, windowCount + 2),
     elasticThreshold: 5,
     openTime: 0,
-    closeTime: totalDuration,
+    closeTime: BUSINESS_DURATION_MINUTES,
     lunchBreakEnabled: bankConfig.lunchBreakEnabled,
     lunchStart: bankConfig.lunchStart,
     lunchDuration: bankConfig.lunchDuration,
-    baseArrivalRate: bankConfig.closeTime / totalDuration,
+    baseArrivalRate: bankConfig.customersPerHour / 60,
     peakHoursMultiplier: 1.5,
-    peakHoursStart: totalDuration * 0.2,
-    peakHoursEnd: totalDuration * 0.5,
+    peakHoursStart: 60,
+    peakHoursEnd: 180,
     avgServiceTime: bankConfig.avgServiceTime,
     serviceTimeStdDev: bankConfig.avgServiceTime * 0.3,
     isPensionDay: false,
@@ -156,7 +157,7 @@ export default function BankSimulationPage() {
 
   // 随机模拟配置
   const [bankConfig, setBankConfig] = useState<RealisticSimulationForm>({
-    closeTime: 50,          // 客户数量
+    customersPerHour: 20,   // 每小时客户数
     avgServiceTime: 5,      // 平均服务时间
     // 真实情况参数
     lunchBreakEnabled: false,
@@ -178,6 +179,9 @@ export default function BankSimulationPage() {
   const [resultIsPlaying, setResultIsPlaying] = useState(false);
   const [resultCurrentTime, setResultCurrentTime] = useState(0);
   const [resultSpeed, setResultSpeed] = useState(1);
+  const estimatedCustomers = Math.round(bankConfig.customersPerHour * BUSINESS_DURATION_HOURS);
+  const lunchStartMax = BUSINESS_DURATION_MINUTES - Math.max(bankConfig.lunchDuration, 15);
+  const lunchDurationMax = Math.max(15, BUSINESS_DURATION_MINUTES - bankConfig.lunchStart);
 
   // 添加客户
   const addCustomer = useCallback(() => {
@@ -720,17 +724,20 @@ export default function BankSimulationPage() {
               <p className="text-gray-600 mb-6">自动生成随机客户数据并立即运行模拟，结果可在「模拟结果」和「动态演示」Tab 查看</p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
                 <div className="bg-white rounded-2xl p-6 border-2 border-indigo-300 shadow">
-                  <h3 className="text-lg font-bold text-gray-800 mb-4">客户数量</h3>
+                  <h3 className="text-lg font-bold text-gray-800 mb-4">人流密度</h3>
                   <label className="block text-sm font-bold text-gray-700 mb-2">
-                    营业时长: <span className="text-indigo-600 text-xl">{bankConfig.closeTime}</span> 分钟
+                    每小时客户数: <span className="text-indigo-600 text-xl">{bankConfig.customersPerHour}</span> 人/小时
                   </label>
                   <input
-                    type="range" min="10" max="200" step="10"
-                    value={bankConfig.closeTime}
-                    onChange={(e) => setBankConfig({ ...bankConfig, closeTime: Number(e.target.value) })}
+                    type="range" min="10" max="60" step="5"
+                    value={bankConfig.customersPerHour}
+                    onChange={(e) => setBankConfig({ ...bankConfig, customersPerHour: Number(e.target.value) })}
                     className="w-full h-3 bg-gray-200 rounded-lg appearance-none cursor-pointer"
                   />
-                  <div className="flex justify-between text-xs text-gray-500 mt-1"><span>10人</span><span>200人</span></div>
+                  <div className="flex justify-between text-xs text-gray-500 mt-1"><span>10 人/小时</span><span>60 人/小时</span></div>
+                  <div className="mt-3 rounded-xl bg-indigo-50 px-4 py-3 text-sm text-indigo-700">
+                    营业时长固定为 8 小时，预计到达约 <span className="font-bold">{estimatedCustomers}</span> 人
+                  </div>
                 </div>
                 <div className="bg-white rounded-2xl p-6 border-2 border-emerald-300 shadow">
                   <h3 className="text-lg font-bold text-gray-800 mb-4">平均服务时间</h3>
@@ -771,14 +778,14 @@ export default function BankSimulationPage() {
                         <span>开始（开门后）</span>
                         <span className="font-bold text-indigo-600">{bankConfig.lunchStart}分钟</span>
                       </div>
-                      <input type="range" min="60" max="240" step="10" value={bankConfig.lunchStart}
+                      <input type="range" min="60" max={lunchStartMax} step="10" value={bankConfig.lunchStart}
                         onChange={e => setBankConfig({...bankConfig, lunchStart: Number(e.target.value)})}
                         className="w-full h-2" />
                       <div className="flex justify-between text-xs text-gray-600 mt-1">
                         <span>时长</span>
                         <span className="font-bold text-indigo-600">{bankConfig.lunchDuration}分钟</span>
                       </div>
-                      <input type="range" min="15" max="90" step="5" value={bankConfig.lunchDuration}
+                      <input type="range" min="15" max={Math.min(90, lunchDurationMax)} step="5" value={bankConfig.lunchDuration}
                         onChange={e => setBankConfig({...bankConfig, lunchDuration: Number(e.target.value)})}
                         className="w-full h-2" />
                     </div>

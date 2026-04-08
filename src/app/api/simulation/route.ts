@@ -10,6 +10,14 @@ import {
   BankConfig,
   generateTestData
 } from '@/lib/bank-simulation';
+import { BenchmarkEngine } from '@/lib/benchmark-engine';
+import { JSQPolicy } from '@/lib/policies/jsq';
+import { RoundRobinPolicy } from '@/lib/policies/rr';
+import { LeastWorkloadPolicy } from '@/lib/policies/leastWorkload';
+import { SingleQueueFCFSPolicy } from '@/lib/policies/singleQueueFcfs';
+import { HoldingPoolSPTPolicy } from '@/lib/policies/holdingPoolSpt';
+import { benchmarkPresets, getPreset } from '@/lib/benchmark-presets';
+import type { BenchmarkConfig } from '@/lib/benchmark-types';
 
 function cloneSimulationInput(data: SimulationInput): SimulationInput {
   return {
@@ -61,6 +69,15 @@ export async function POST(request: NextRequest) {
 
       case 'compareAlgorithms':
         return handleCompareAlgorithms(data);
+
+      case 'benchmarkCompare':
+        return handleBenchmarkCompare(data);
+
+      case 'benchmarkSingle':
+        return handleBenchmarkSingle(data);
+
+      case 'benchmarkPresets':
+        return handleBenchmarkPresets();
 
       default:
         return NextResponse.json(
@@ -204,13 +221,130 @@ function handleCompareAlgorithms(data: unknown) {
   return NextResponse.json({ success: true, results, validation });
 }
 
+/**
+ * Benchmark模式：批量对比多个算法
+ */
+function handleBenchmarkCompare(data: unknown) {
+  const { preset, algorithms } = data as { preset: string; algorithms?: string[] };
+
+  const presetData = getPreset(preset);
+  if (!presetData) {
+    return NextResponse.json(
+      { success: false, error: '未找到指定的预设场景' },
+      { status: 400 }
+    );
+  }
+
+  // 默认对比所有5个算法
+  const allPolicies = [
+    new JSQPolicy(),
+    new RoundRobinPolicy(),
+    new LeastWorkloadPolicy(),
+    new SingleQueueFCFSPolicy(),
+    new HoldingPoolSPTPolicy()
+  ];
+
+  const selectedPolicies = algorithms
+    ? allPolicies.filter(p => algorithms.includes(p.name))
+    : allPolicies;
+
+  const results = selectedPolicies.map(policy => {
+    const config: BenchmarkConfig = {
+      serverCount: presetData.serverCount,
+      jobs: presetData.jobs,
+      policy
+    };
+    const engine = new BenchmarkEngine(config);
+    return engine.run();
+  });
+
+  return NextResponse.json({
+    success: true,
+    preset: presetData.name,
+    results
+  });
+}
+
+/**
+ * Benchmark模式：运行单个算法
+ */
+function handleBenchmarkSingle(data: unknown) {
+  const { preset, algorithm } = data as { preset: string; algorithm: string };
+
+  const presetData = getPreset(preset);
+  if (!presetData) {
+    return NextResponse.json(
+      { success: false, error: '未找到指定的预设场景' },
+      { status: 400 }
+    );
+  }
+
+  const allPolicies = [
+    new JSQPolicy(),
+    new RoundRobinPolicy(),
+    new LeastWorkloadPolicy(),
+    new SingleQueueFCFSPolicy(),
+    new HoldingPoolSPTPolicy()
+  ];
+
+  const policy = allPolicies.find(p => p.name === algorithm);
+  if (!policy) {
+    return NextResponse.json(
+      { success: false, error: '未找到指定的算法' },
+      { status: 400 }
+    );
+  }
+
+  const config: BenchmarkConfig = {
+    serverCount: presetData.serverCount,
+    jobs: presetData.jobs,
+    policy
+  };
+
+  const engine = new BenchmarkEngine(config);
+  const result = engine.run();
+
+  return NextResponse.json({
+    success: true,
+    preset: presetData.name,
+    result
+  });
+}
+
+/**
+ * 获取所有预设场景列表
+ */
+function handleBenchmarkPresets() {
+  const presets = Object.entries(benchmarkPresets).map(([key, preset]) => ({
+    key,
+    name: preset.name,
+    description: preset.description,
+    serverCount: preset.serverCount,
+    jobCount: preset.jobs.length
+  }));
+
+  return NextResponse.json({
+    success: true,
+    presets
+  });
+}
+
 export async function GET() {
   return NextResponse.json({
-    message: '银行业务模拟API',
+    message: 'QueueLab 调度实验平台 API',
     endpoints: {
       'POST /api/simulation': {
-        actions: ['simulate', 'realistic', 'validate', 'testData', 'compareAlgorithms'],
-        description: '执行模拟、真实场景模拟、验证数据或获取测试数据'
+        actions: [
+          'simulate',
+          'realistic',
+          'validate',
+          'testData',
+          'compareAlgorithms',
+          'benchmarkCompare',
+          'benchmarkSingle',
+          'benchmarkPresets'
+        ],
+        description: '执行模拟、真实场景模拟、验证数据、获取测试数据或运行benchmark实验'
       }
     }
   });
