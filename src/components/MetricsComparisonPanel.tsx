@@ -1,90 +1,101 @@
-/**
- * Metrics Comparison Panel
- * 显示多个算法的指标对比
- */
-
 import React from 'react';
 import type { BenchmarkRunResult } from '@/lib/benchmark-types';
-import { metricNames, metricDirections } from '@/lib/benchmark-metrics';
+import { getAlgorithmMeta, isAlgorithmId } from '@/lib/benchmark-registry';
 
 interface MetricsComparisonPanelProps {
   results: BenchmarkRunResult[];
 }
 
+const metricConfig = [
+  { key: 'avgWait', label: '平均等待时间', higherIsBetter: false, format: fixed2 },
+  { key: 'p95Wait', label: 'P95 等待时间', higherIsBetter: false, format: fixed2 },
+  { key: 'avgStay', label: '平均逗留时间', higherIsBetter: false, format: fixed2 },
+  { key: 'serviceLevel5m', label: '5 分钟内开始服务比例', higherIsBetter: true, format: percent1 },
+  { key: 'jainFairnessWait', label: '等待公平性 Jain', higherIsBetter: true, format: fixed3 },
+  { key: 'utilizationStd', label: '窗口利用率离散度', higherIsBetter: false, format: fixed3 },
+  { key: 'maxQueueLength', label: '峰值队列长度', higherIsBetter: false, format: fixed2 },
+  { key: 'maxWait', label: '最大等待时间', higherIsBetter: false, format: fixed2 },
+  { key: 'starvedCount', label: '饥饿客户数', higherIsBetter: false, format: fixed2 },
+] as const;
+
 export default function MetricsComparisonPanel({ results }: MetricsComparisonPanelProps) {
   if (results.length === 0) {
     return (
-      <div className="bg-white rounded-lg border border-gray-200 p-6 text-center text-gray-400">
-        运行算法对比后查看指标
+      <div className="rounded-2xl border border-slate-200 bg-white p-6 text-center text-slate-400">
+        运行多算法对比后，这里会显示指标表。
       </div>
     );
   }
 
-  const metrics = Object.keys(results[0].metrics) as Array<keyof typeof results[0]['metrics']>;
-
   return (
-    <div className="bg-white rounded-lg border border-gray-200 p-6">
-      <h3 className="text-lg font-bold text-gray-800 mb-4">指标对比</h3>
+    <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
+      <table className="min-w-full text-sm">
+        <thead className="bg-slate-50">
+          <tr className="border-b border-slate-200">
+            <th className="px-4 py-3 text-left font-semibold text-slate-700">指标</th>
+            {results.map((result) => (
+              <th
+                key={result.algorithmId ?? result.algorithmName}
+                className="px-4 py-3 text-center font-semibold text-slate-700"
+              >
+                {getAlgorithmLabel(result)}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {metricConfig.map((metric) => {
+            const values = results.map((result) => result.metrics[metric.key]);
+            const bestValue = metric.higherIsBetter ? Math.max(...values) : Math.min(...values);
 
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-gray-200">
-              <th className="text-left py-2 px-3 font-semibold text-gray-700">指标</th>
-              {results.map((result, index) => (
-                <th key={index} className="text-center py-2 px-3 font-semibold text-gray-700">
-                  {result.algorithmName}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {metrics.map((metric) => {
-              const values = results.map(r => r.metrics[metric]);
-              const isBetter = metricDirections[metric];
-              const bestValue = isBetter
-                ? Math.max(...values)
-                : Math.min(...values);
+            return (
+              <tr key={metric.key} className="border-b border-slate-100">
+                <td className="px-4 py-3 text-slate-700">
+                  {metric.label}
+                  <span className="ml-2 text-xs text-slate-400">
+                    {metric.higherIsBetter ? '越高越好' : '越低越好'}
+                  </span>
+                </td>
+                {results.map((result) => {
+                  const value = result.metrics[metric.key];
+                  const isBest = value === bestValue;
 
-              return (
-                <tr key={metric} className="border-b border-gray-100">
-                  <td className="py-2 px-3 text-gray-700">
-                    {metricNames[metric]}
-                    <span className="text-xs text-gray-400 ml-1">
-                      ({isBetter ? '↑' : '↓'})
-                    </span>
-                  </td>
-                  {results.map((result, index) => {
-                    const value = result.metrics[metric];
-                    const isBest = value === bestValue;
-
-                    return (
-                      <td
-                        key={index}
-                        className={`text-center py-2 px-3 font-mono ${
-                          isBest ? 'bg-green-50 text-green-700 font-bold' : 'text-gray-600'
-                        }`}
-                      >
-                        {formatMetricValue(metric, value)}
-                      </td>
-                    );
-                  })}
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+                  return (
+                    <td
+                      key={`${result.algorithmId ?? result.algorithmName}-${metric.key}`}
+                      className={`px-4 py-3 text-center font-mono ${
+                        isBest ? 'bg-emerald-50 font-bold text-emerald-700' : 'text-slate-600'
+                      }`}
+                    >
+                      {metric.format(value)}
+                    </td>
+                  );
+                })}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
 
-function formatMetricValue(metric: string, value: number): string {
-  if (metric === 'serviceLevel5m') {
-    return `${(value * 100).toFixed(1)}%`;
-  }
-  if (metric === 'jainFairnessWait' || metric === 'utilizationStd') {
-    return value.toFixed(3);
-  }
+function fixed2(value: number) {
   return value.toFixed(2);
+}
+
+function fixed3(value: number) {
+  return value.toFixed(3);
+}
+
+function percent1(value: number) {
+  return `${(value * 100).toFixed(1)}%`;
+}
+
+function getAlgorithmLabel(result: BenchmarkRunResult) {
+  if (isAlgorithmId(result.algorithmId)) {
+    return getAlgorithmMeta(result.algorithmId).shortName;
+  }
+
+  return result.algorithmName;
 }

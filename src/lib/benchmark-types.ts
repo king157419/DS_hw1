@@ -1,9 +1,3 @@
-/**
- * QueueLab Benchmark Types
- * 调度实验平台核心类型定义
- */
-
-// Job（客户/任务）
 export interface Job {
   id: number;
   arrivalTime: number;
@@ -16,7 +10,6 @@ export interface Job {
   holdingEnterTime: number;
 }
 
-// Server（窗口/服务器）
 export interface Server {
   id: number;
   busyUntil: number;
@@ -26,20 +19,18 @@ export interface Server {
   idleTime: number;
 }
 
-// 队列结构类型
 export type QueueStructureKind = 'dedicated' | 'shared' | 'holding';
+export type CandidateScoreMap = Record<number, number>;
 
-// 决策原因
 export interface DecisionReason {
   time: number;
   jobId: number;
   serverId: number | null;
   action: 'arrival' | 'dispatch';
   reason: string;
-  candidateScores?: Record<number, number>;
+  candidateScores?: CandidateScoreMap;
 }
 
-// 时间线事件
 export interface TimelineEvent {
   time: number;
   type: 'arrival' | 'start_service' | 'end_service';
@@ -48,17 +39,15 @@ export interface TimelineEvent {
   description: string;
 }
 
-// Benchmark状态快照
 export interface BenchmarkState {
   currentTime: number;
   jobs: Job[];
   servers: Server[];
-  sharedQueue: number[];  // job ids
-  holdingPool: number[];  // job ids
+  sharedQueue: number[];
+  holdingPool: number[];
   queueStructure: QueueStructureKind;
 }
 
-// Benchmark指标
 export interface BenchmarkMetrics {
   avgWait: number;
   p95Wait: number;
@@ -66,11 +55,27 @@ export interface BenchmarkMetrics {
   serviceLevel5m: number;
   jainFairnessWait: number;
   utilizationStd: number;
+  maxQueueLength: number;
+  maxWait: number;
+  starvedCount: number;
 }
 
-// Benchmark运行结果
+export interface PlaybackFrame {
+  time: number;
+  currentTime: number;
+  eventType: 'arrival' | 'departure' | 'start_service';
+  jobs: Job[];
+  servers: Server[];
+  sharedQueue: number[];
+  holdingPool: number[];
+  queueStructure: QueueStructureKind;
+  description: string;
+}
+
 export interface BenchmarkRunResult {
+  algorithmId: string;
   algorithmName: string;
+  algorithmShortName?: string;
   queueStructure: QueueStructureKind;
   metrics: BenchmarkMetrics;
   timeline: TimelineEvent[];
@@ -78,37 +83,46 @@ export interface BenchmarkRunResult {
   decisions: DecisionReason[];
   jobs: Job[];
   servers: Server[];
+  playbackFrames: PlaybackFrame[];
 }
 
-// 调度策略接口
+export interface ArrivalDecision {
+  serverId: number | null;
+  reason: string;
+  candidateScores?: CandidateScoreMap;
+}
+
+export interface DispatchDecision {
+  jobId: number | null;
+  reason: string;
+  candidateScores?: CandidateScoreMap;
+}
+
 export interface SchedulingPolicy {
+  id: string;
   name: string;
   queueStructure: QueueStructureKind;
-
-  /**
-   * 当新任务到达时调用
-   * @returns serverId（dedicated模式）或null（shared/holding模式）
-   */
-  onArrival(job: Job, state: BenchmarkState): { serverId: number | null; reason: string };
-
-  /**
-   * 当服务器空闲时调用
-   * @returns jobId或null
-   */
-  onServerIdle(serverId: number, state: BenchmarkState): { jobId: number | null; reason: string };
+  onArrival(job: Job, state: BenchmarkState): ArrivalDecision;
+  onServerIdle(serverId: number, state: BenchmarkState): DispatchDecision;
 }
 
-// Benchmark配置
 export interface BenchmarkConfig {
   serverCount: number;
   jobs: Array<{ arrivalTime: number; serviceTime: number }>;
   policy: SchedulingPolicy;
 }
 
-// Preset场景
+export type Differentiation = 'strong' | 'medium' | 'weak';
+export type Difficulty = 'high' | 'medium' | 'low';
+export type RecommendedFor = 'demo' | 'sanity-check' | 'fairness';
+
 export interface BenchmarkPreset {
+  id: string;
   name: string;
   description: string;
   serverCount: number;
   jobs: Array<{ arrivalTime: number; serviceTime: number }>;
+  differentiation: Differentiation;
+  difficulty: Difficulty;
+  recommendedFor: RecommendedFor;
 }

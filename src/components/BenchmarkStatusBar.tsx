@@ -1,8 +1,3 @@
-/**
- * Benchmark Status Bar
- * 显示当前模拟状态的顶部状态栏
- */
-
 import React from 'react';
 import type { BenchmarkState } from '@/lib/benchmark-types';
 
@@ -17,95 +12,59 @@ export default function BenchmarkStatusBar({
   state,
   algorithmName,
   isPlaying,
-  speed
+  speed,
 }: BenchmarkStatusBarProps) {
   if (!state) {
     return (
-      <div className="bg-gradient-to-r from-indigo-50 to-purple-50 border-b border-indigo-200 px-6 py-3">
-        <div className="text-sm text-gray-500">等待开始模拟...</div>
+      <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500">
+        等待动画状态数据...
       </div>
     );
   }
 
-  const waitingCount = state.jobs.filter(j => j.status === 'waiting').length;
-  const servingCount = state.jobs.filter(j => j.status === 'serving').length;
-  const completedCount = state.jobs.filter(j => j.status === 'completed').length;
+  const waitingCount = state.jobs.filter((job) => job.status === 'waiting').length;
+  const servingCount = state.jobs.filter((job) => job.status === 'serving').length;
+  const completedCount = state.jobs.filter((job) => job.status === 'completed').length;
   const inSystemCount = waitingCount + servingCount;
-
-  const longestQueue = Math.max(
-    ...state.servers.map(s => s.queueJobIds.length),
-    0
-  );
+  const longestQueue = Math.max(...state.servers.map((server) => server.queueJobIds.length), 0);
 
   return (
-    <div className="bg-gradient-to-r from-indigo-50 to-purple-50 border-b border-indigo-200 px-6 py-3">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-6">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold text-gray-600">算法</span>
-            <span className="px-2 py-1 bg-indigo-100 text-indigo-700 rounded text-xs font-bold">
-              {algorithmName}
-            </span>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold text-gray-600">时间</span>
-            <span className="text-sm font-mono font-bold text-indigo-700">
-              {state.currentTime.toFixed(1)} 分钟
-            </span>
-          </div>
-
-          <div className="h-4 w-px bg-gray-300" />
-
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-gray-600">系统内</span>
-            <span className="text-sm font-bold text-orange-600">{inSystemCount}</span>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-gray-600">等待</span>
-            <span className="text-sm font-bold text-yellow-600">{waitingCount}</span>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-gray-600">服务中</span>
-            <span className="text-sm font-bold text-green-600">{servingCount}</span>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-gray-600">已完成</span>
-            <span className="text-sm font-bold text-gray-600">{completedCount}</span>
-          </div>
-
-          <div className="h-4 w-px bg-gray-300" />
-
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-gray-600">最长队列</span>
-            <span className="text-sm font-bold text-red-600">{longestQueue}</span>
-          </div>
-
+    <div className="rounded-lg border border-indigo-200 bg-gradient-to-r from-indigo-50 to-sky-50 px-4 py-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-4 text-sm">
+          <Badge label="算法" value={algorithmName} />
+          <Badge label="时间" value={`${state.currentTime.toFixed(1)} min`} />
+          <Badge label="系统内" value={String(inSystemCount)} />
+          <Badge label="等待" value={String(waitingCount)} />
+          <Badge label="服务中" value={String(servingCount)} />
+          <Badge label="已完成" value={String(completedCount)} />
+          <Badge label="最长队列" value={String(longestQueue)} />
           {state.queueStructure === 'shared' && (
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-600">共享队列</span>
-              <span className="text-sm font-bold text-purple-600">{state.sharedQueue.length}</span>
-            </div>
+            <Badge label="共享队列" value={String(state.sharedQueue.length)} />
           )}
-
           {state.queueStructure === 'holding' && (
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-600">待派池</span>
-              <span className="text-sm font-bold text-purple-600">{state.holdingPool.length}</span>
-            </div>
+            <Badge label="待派池" value={String(state.holdingPool.length)} />
           )}
         </div>
 
-        <div className="flex items-center gap-2">
-          <div className={`w-2 h-2 rounded-full ${isPlaying ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`} />
-          <span className="text-xs text-gray-600">
-            {isPlaying ? `播放中 (${speed}x)` : '已暂停'}
-          </span>
+        <div className="flex items-center gap-2 text-sm text-slate-600">
+          <span
+            className={`h-2.5 w-2.5 rounded-full ${
+              isPlaying ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'
+            }`}
+          />
+          <span>{isPlaying ? `播放中 (${speed}x)` : '已暂停'}</span>
         </div>
       </div>
     </div>
+  );
+}
+
+function Badge({ label, value }: { label: string; value: string }) {
+  return (
+    <span className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-slate-700 shadow-sm">
+      <span className="text-xs text-slate-500">{label}</span>
+      <span className="font-semibold">{value}</span>
+    </span>
   );
 }

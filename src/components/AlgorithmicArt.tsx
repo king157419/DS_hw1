@@ -1,394 +1,372 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useState } from 'react';
+import type { BenchmarkRunResult, Job } from '@/lib/benchmark-types';
+import { getAlgorithmMeta, isAlgorithmId } from '@/lib/benchmark-registry';
 
-interface SimStats {
-  totalCustomers: number;
-  avgWaitTime: number;
-  totalSimulationTime: number;
-}
-
-interface WindowStat {
-  id: number;
-  totalServed: number;
-  totalServiceTime: number;
-  idleTime: number;
-}
-
-interface CustomerData {
-  id: number;
-  arrivalTime: number;
-  waitTime: number;
-  serviceTime: number;
-  windowId: number;
-  endTime: number;
-}
-
-export interface ComparisonEntry {
-  algorithmName: string;
-  result: {
-    customers: CustomerData[];
-    windows: WindowStat[];
-    statistics: SimStats;
-  };
-}
+export type ArtMode = 'flow' | 'compare';
 
 export interface AlgorithmicArtProps {
-  statistics: SimStats;
-  windows: WindowStat[];
-  customers: CustomerData[];
-  comparisonResults?: ComparisonEntry[];
+  singleResult?: BenchmarkRunResult | null;
+  comparisonResults?: BenchmarkRunResult[];
+  initialMode?: ArtMode;
 }
 
-// Anthropic brand palette
-const C: Record<string, [number,number,number]> = {
-  bg:     [20, 20, 19],
-  blue:   [106, 155, 204],
-  orange: [217, 119, 87],
-  green:  [120, 140, 93],
-  gray:   [176, 174, 165],
-  red:    [220, 60, 60],
-  yellow: [230, 190, 80],
-};
-function lerp(a: number, b: number, t: number) { return a + (b - a) * t; }
-
-function waitColor(wt: number, avgWait: number): [number,number,number] {
-  const t = Math.min(1, wt / Math.max(1, avgWait * 1.5));
-  if (t < 0.5) {
-    const s = t * 2;
-    return [Math.round(lerp(C.blue[0],C.orange[0],s)), Math.round(lerp(C.blue[1],C.orange[1],s)), Math.round(lerp(C.blue[2],C.orange[2],s))];
-  }
-  const s = (t - 0.5) * 2;
-  return [Math.round(lerp(C.orange[0],C.red[0],s)), Math.round(lerp(C.orange[1],C.red[1],s)), Math.round(lerp(C.orange[2],C.red[2],s))];
-}
-
-export default function AlgorithmicArt({ statistics, windows, customers, comparisonResults }: AlgorithmicArtProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const p5Ref = useRef<any>(null);
-  const statisticsRef = useRef(statistics);
-  const windowsRef = useRef(windows);
-  const customersRef = useRef(customers);
-  const comparisonResultsRef = useRef(comparisonResults);
-
-  const utilization = windows.map(w =>
-    Math.min(1, w.totalServiceTime / Math.max(1, statistics.totalSimulationTime))
-  );
+export default function AlgorithmicArt({
+  singleResult,
+  comparisonResults = [],
+  initialMode = 'flow',
+}: AlgorithmicArtProps) {
+  const canFlow = Boolean(singleResult);
+  const canCompare = comparisonResults.length > 0;
+  const [mode, setMode] = useState<ArtMode>(canFlow ? initialMode : 'compare');
 
   useEffect(() => {
-    statisticsRef.current = statistics;
-    windowsRef.current = windows;
-    customersRef.current = customers;
-    comparisonResultsRef.current = comparisonResults;
-
-    if (p5Ref.current) {
-      p5Ref.current.redraw();
+    if (mode === 'flow' && !canFlow && canCompare) {
+      setMode('compare');
+    } else if (mode === 'compare' && !canCompare && canFlow) {
+      setMode('flow');
     }
-  }, [statistics, windows, customers, comparisonResults]);
+  }, [canCompare, canFlow, mode]);
 
-  useEffect(() => {
-    if (!containerRef.current || p5Ref.current) return;
-
-    let mounted = true;
-
-    import('p5').then((mod) => {
-      if (!mounted || !containerRef.current) return;
-      const p5 = mod.default;
-      const container = containerRef.current;
-
-      const sketch = (p: any) => {
-        const W = container.offsetWidth || 700;
-        const H = 420;
-
-        p.setup = () => {
-          p.createCanvas(W, H);
-          p.noLoop();
-          p.redraw();
-        };
-
-        p.draw = () => {
-          p.background(C.bg[0], C.bg[1], C.bg[2]);
-          const nextComparisonResults = comparisonResultsRef.current;
-          if (nextComparisonResults && nextComparisonResults.length > 0) {
-            drawComparison(p, W, H, nextComparisonResults);
-          } else {
-            drawSingle(p, W, H, statisticsRef.current, windowsRef.current, customersRef.current);
-          }
-        };
-      };
-
-      p5Ref.current = new p5(sketch, container);
-    });
-
-    return () => {
-      mounted = false;
-      if (p5Ref.current) {
-        p5Ref.current.remove();
-        p5Ref.current = null;
-      }
-    };
-  }, []);
   return (
-    <div style={{ display: 'flex', background: '#14141300', borderRadius: 12, overflow: 'hidden', minHeight: 420 }}>
-      {/* 侧边栏 */}
-      <div style={{ width: 180, background: '#18181a', padding: '20px 16px', display: 'flex', flexDirection: 'column', gap: 14, flexShrink: 0 }}>
+    <section className="rounded-[28px] border border-slate-200 bg-white/95 p-5 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 pb-4">
         <div>
-          <div style={{ color: '#6b6b68', fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 8 }}>模拟统计</div>
-          <div style={{ color: '#b0aea5', fontSize: 12, marginBottom: 4 }}>总客户数 <span style={{ color: '#d97757', fontWeight: 700 }}>{statistics.totalCustomers}</span></div>
-          <div style={{ color: '#b0aea5', fontSize: 12, marginBottom: 4 }}>平均等待 <span style={{ color: '#6a9bcc', fontWeight: 700 }}>{statistics.avgWaitTime.toFixed(1)}m</span></div>
-          <div style={{ color: '#b0aea5', fontSize: 12 }}>仿真时长 <span style={{ color: '#788c5d', fontWeight: 700 }}>{statistics.totalSimulationTime.toFixed(0)}m</span></div>
-          <div style={{ color: '#6b6b68', fontSize: 9, marginTop: 4 }}>注: 仿真时长指最后一位客户离开的时刻。</div>
+          <h3 className="text-lg font-semibold text-slate-900">Algorithmic Art</h3>
+          <p className="mt-1 text-sm text-slate-500">
+            用显式 tab 在单算法流向图和多算法分析视图之间切换。
+          </p>
         </div>
-        <div>
-          <div style={{ color: '#6b6b68', fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 8 }}>窗口利用率</div>
-          {utilization.map((util, i) => (
-            <div key={i} style={{ marginBottom: 7 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
-                <span style={{ color: '#6b6b68', fontSize: 10 }}>窗口{i + 1}</span>
-                <span style={{ color: '#788c5d', fontSize: 10 }}>{(util * 100).toFixed(0)}%</span>
-              </div>
-              <div style={{ height: 4, background: '#2a2a28', borderRadius: 2, overflow: 'hidden' }}>
-                <div style={{ height: '100%', width: `${util * 100}%`, background: '#788c5d', borderRadius: 2 }} />
-              </div>
-            </div>
-          ))}
-        </div>
-        <div style={{ borderTop: '1px solid #2a2a28', paddingTop: 12 }}>
-          <div style={{ color: '#b0aea5', fontSize: 10, marginBottom: 6 }}>等待时间色阶</div>
-          {([['等待: 短', '#6a9bcc'], ['等待: 中', '#d97757'], ['等待: 长', '#dc3c3c']] as [string,string][]).map(([label, col]) => (
-            <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-              <div style={{ width: 8, height: 8, borderRadius: 2, background: col }} />
-              <span style={{ color: '#b0aea5', fontSize: 10 }}>{label}</span>
-            </div>
-          ))}
-          <div style={{ color: '#6b6b68', fontSize: 9, marginTop: 8, lineHeight: 1.4 }}>
-            中心为入口，外圆为窗口。<br/>线条代表客户流向。
-          </div>
+
+        <div className="inline-flex rounded-full bg-slate-100 p-1">
+          <TabButton active={mode === 'flow'} disabled={!canFlow} onClick={() => setMode('flow')}>
+            Flow View
+          </TabButton>
+          <TabButton
+            active={mode === 'compare'}
+            disabled={!canCompare}
+            onClick={() => setMode('compare')}
+          >
+            Compare View
+          </TabButton>
         </div>
       </div>
-      {/* canvas 区域 */}
-      <div ref={containerRef} style={{ flex: 1, minWidth: 0 }} />
+
+      <div className="mt-5 min-h-[430px]">
+        {mode === 'flow' ? (
+          <FlowView result={singleResult ?? null} />
+        ) : (
+          <CompareView results={comparisonResults} />
+        )}
+      </div>
+    </section>
+  );
+}
+
+function FlowView({ result }: { result: BenchmarkRunResult | null }) {
+  if (!result) {
+    return <EmptyState message="先运行一次单算法动画，Flow View 才会有内容。" />;
+  }
+
+  const sampledJobs = sampleJobs(result.jobs, 36);
+  const totalTime = Math.max(...result.jobs.map((job) => job.endTime), 0);
+  const serverPositions = getServerPositions(result.servers.length);
+
+  return (
+    <div className="grid items-stretch gap-5 lg:grid-cols-[280px_minmax(0,1fr)]">
+      <aside className="flex h-full flex-col gap-4 rounded-[24px] bg-slate-950 px-5 py-5 text-slate-100">
+        <div>
+          <div className="text-xs uppercase tracking-[0.24em] text-slate-400">Flow</div>
+          <div className="mt-2 text-lg font-semibold">{displayAlgorithmName(result)}</div>
+          <div className="mt-2 inline-flex rounded-full bg-white/10 px-3 py-1 text-xs text-slate-200">
+            {queueStructureLabel(result.queueStructure)}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <StatCard label="平均等待" value={`${result.metrics.avgWait.toFixed(2)}m`} />
+          <StatCard label="P95 等待" value={`${result.metrics.p95Wait.toFixed(2)}m`} />
+          <StatCard label="峰值队列" value={`${result.metrics.maxQueueLength}`} />
+          <StatCard label="总时长" value={`${totalTime.toFixed(1)}m`} />
+        </div>
+
+        <div className="rounded-[20px] border border-white/10 bg-white/5 p-4">
+          <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Legend</div>
+          <div className="mt-3 space-y-2 text-sm text-slate-300">
+            <LegendRow color="#38bdf8" label="等待较短" />
+            <LegendRow color="#f59e0b" label="等待中等" />
+            <LegendRow color="#fb7185" label="等待较长" />
+          </div>
+        </div>
+      </aside>
+
+      <div className="rounded-[28px] border border-slate-200 bg-[radial-gradient(circle_at_top,_rgba(14,165,233,0.14),_transparent_42%),linear-gradient(180deg,#0f172a,#111827)] p-5">
+        <svg viewBox="0 0 860 420" className="h-full w-full">
+          <circle cx="240" cy="210" r="24" fill="#f8fafc" fillOpacity="0.95" />
+          <circle cx="240" cy="210" r="12" fill="#f97316" />
+          <text x="240" y="252" textAnchor="middle" fontSize="12" fill="#cbd5e1">
+            客户流入
+          </text>
+
+          {sampledJobs.map((job) => {
+            const target = serverPositions[job.assignedServerId - 1];
+            if (!target) {
+              return null;
+            }
+
+            return (
+              <path
+                key={job.id}
+                d={`M 240 210 Q ${(240 + target.x) / 2} ${Math.min(210, target.y) - 36} ${target.x} ${target.y}`}
+                fill="none"
+                stroke={waitColor(job.startTime - job.arrivalTime, result.metrics.avgWait)}
+                strokeOpacity="0.42"
+                strokeWidth="2"
+              />
+            );
+          })}
+
+          {result.servers.map((server, index) => {
+            const target = serverPositions[index];
+            const utilization = totalTime > 0 ? server.busyTime / totalTime : 0;
+            return (
+              <g key={server.id}>
+                <circle
+                  cx={target.x}
+                  cy={target.y}
+                  r="34"
+                  fill={utilization > 0.75 ? '#f97316' : utilization > 0.45 ? '#38bdf8' : '#94a3b8'}
+                  fillOpacity="0.92"
+                />
+                <circle cx={target.x} cy={target.y} r="14" fill="#0f172a" fillOpacity="0.75" />
+                <text x={target.x} y={target.y - 52} textAnchor="middle" fontSize="13" fill="#e2e8f0">
+                  窗口 {server.id}
+                </text>
+                <text x={target.x} y={target.y + 58} textAnchor="middle" fontSize="12" fill="#cbd5e1">
+                  利用率 {(utilization * 100).toFixed(0)}%
+                </text>
+              </g>
+            );
+          })}
+        </svg>
+      </div>
     </div>
   );
 }
-// ── 单模式：弧线 + 窗口节点图 ──
-function drawSingle(p: any, W: number, H: number, statistics: SimStats, windows: WindowStat[], customers: CustomerData[]) {
-  const avgWait = statistics.avgWaitTime;
-  const CX = W / 2, CY = H / 2;
-  const R = Math.min(W, H) * 0.32;
 
-  // 弧线：每个客户一条，颜色=等待时间
-  p.strokeWeight(0.6);
-  p.noFill();
-  const sample = customers.length > 120 ? customers.filter((_:any,i:number)=>i%Math.ceil(customers.length/120)===0) : customers;
-  for (const c of sample) {
-    const [r,g,b] = waitColor(c.waitTime, avgWait);
-    p.stroke(r, g, b, 60);
-    const wi = (c.windowId - 1) % windows.length;
-    const angle = (wi / windows.length) * Math.PI * 2 - Math.PI / 2;
-    const wx = CX + Math.cos(angle) * R;
-    const wy = CY + Math.sin(angle) * R;
-    const cx1 = CX + (wx - CX) * 0.3;
-    const cy1 = CY + (wy - CY) * 0.3 - 30;
-    p.bezier(CX, CY, cx1, cy1, wx - 10, wy - 10, wx, wy);
+function CompareView({ results }: { results: BenchmarkRunResult[] }) {
+  if (results.length === 0) {
+    return <EmptyState message="先运行一次多算法对比，Compare View 才会有内容。" />;
   }
 
-  // 中心节点
-  p.noStroke();
-  p.fill(C.orange[0], C.orange[1], C.orange[2], 200);
-  p.circle(CX, CY, 18);
-  p.fill(C.bg[0], C.bg[1], C.bg[2]);
-  p.circle(CX, CY, 10);
+  const sorted = [...results].sort((left, right) => left.metrics.avgWait - right.metrics.avgWait);
+  const bestWait = sorted[0].metrics.avgWait;
+  const worstWait = sorted[sorted.length - 1].metrics.avgWait;
+  const spread = worstWait - bestWait;
+  const lowDifference = sorted.length < 2 || spread < 0.5 || spread / Math.max(worstWait, 1) < 0.08;
 
-  // 窗口节点
-  p.textAlign(p.CENTER, p.CENTER);
-  for (let i = 0; i < windows.length; i++) {
-    const w = windows[i];
-    const angle = (i / windows.length) * Math.PI * 2 - Math.PI / 2;
-    const wx = CX + Math.cos(angle) * R;
-    const wy = CY + Math.sin(angle) * R;
-    const util = Math.min(1, w.totalServiceTime / Math.max(1, statistics.totalSimulationTime));
-    const [r,g,b] = [Math.round(lerp(C.blue[0],C.green[0],util)), Math.round(lerp(C.blue[1],C.green[1],util)), Math.round(lerp(C.blue[2],C.green[2],util))];
-    p.fill(r, g, b, 220);
-    p.noStroke();
-    p.circle(wx, wy, 28);
-    p.fill(255);
-    p.textSize(8);
-    p.text(`W${w.id}`, wx, wy - 4);
-    p.text(`${w.totalServed}人`, wx, wy + 5);
-  }
+  return (
+    <div className="flex h-full flex-col gap-5">
+      <div
+        className={`rounded-[22px] border px-4 py-3 text-sm ${
+          lowDifference
+            ? 'border-slate-200 bg-slate-50 text-slate-600'
+            : 'border-amber-200 bg-amber-50 text-amber-700'
+        }`}
+      >
+        {lowDifference
+          ? '当前场景下算法差异较小，所以这里刻意弱化“赢家”视觉，避免把微小差异渲染得过强。'
+          : '当前场景差异足够明显，因此会适度强调平均等待时间最优的算法。'}
+      </div>
 
-  // 标题
-  p.fill(C.gray[0], C.gray[1], C.gray[2], 180);
-  p.noStroke();
-  p.textSize(11);
-  p.textAlign(p.LEFT, p.TOP);
-  p.text('客户流量分布', 16, 14);
-  p.fill(C.gray[0], C.gray[1], C.gray[2], 120);
-  p.textSize(9);
-  p.text('弧线颜色代表该路径上客户的平均等待程度 (蓝色=短, 红色=长)', 16, 30);
+      <div className="grid items-stretch gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {sorted.map((result, index) => {
+          const isBest = index === 0 && !lowDifference;
+          return (
+            <article
+              key={`${result.algorithmId}-${result.algorithmName}`}
+              className={`flex h-full flex-col rounded-[24px] border p-5 ${
+                isBest ? 'border-orange-200 bg-orange-50 shadow-sm' : 'border-slate-200 bg-white'
+              }`}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold text-slate-900">
+                    {displayAlgorithmName(result)}
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    {queueStructureLabel(result.queueStructure)}
+                  </div>
+                </div>
+                {isBest ? (
+                  <span className="rounded-full bg-orange-100 px-3 py-1 text-xs font-semibold text-orange-700">
+                    差异最优
+                  </span>
+                ) : null}
+              </div>
 
-  // 绘制雷达图 (如果窗口数为5或更多)
-  if (windows.length >= 4) {
-    drawRadar(p, CX, CY, statistics, windows);
-  }
+              <div className="mt-5 text-4xl font-semibold text-slate-900">
+                {result.metrics.avgWait.toFixed(2)}
+                <span className="ml-1 text-base text-slate-400">min</span>
+              </div>
+              <div className="mt-1 text-sm text-slate-500">平均等待时间</div>
+
+              <div className="mt-5 grid grid-cols-2 gap-3">
+                <MetricChip label="P95" value={`${result.metrics.p95Wait.toFixed(2)}m`} />
+                <MetricChip label="公平性" value={result.metrics.jainFairnessWait.toFixed(3)} />
+                <MetricChip label="峰值队列" value={`${result.metrics.maxQueueLength}`} />
+                <MetricChip label="负载离散" value={result.metrics.utilizationStd.toFixed(3)} />
+              </div>
+            </article>
+          );
+        })}
+      </div>
+
+      <div className="rounded-[24px] border border-slate-200 bg-slate-950 px-5 py-5 text-slate-100">
+        <div className="mb-4 text-sm font-medium text-slate-300">平均等待时间对比</div>
+        <div className="space-y-3">
+          {sorted.map((result) => {
+            const width = worstWait === 0 ? 0 : (result.metrics.avgWait / worstWait) * 100;
+            return (
+              <div key={`${result.algorithmId}-${result.algorithmName}`}>
+                <div className="mb-1 flex items-center justify-between text-sm">
+                  <span>{displayAlgorithmName(result)}</span>
+                  <span className="font-mono text-slate-300">
+                    {result.metrics.avgWait.toFixed(2)}m
+                  </span>
+                </div>
+                <div className="h-3 overflow-hidden rounded-full bg-white/10">
+                  <div
+                    className={`h-full rounded-full ${lowDifference ? 'bg-slate-400/70' : 'bg-sky-400'}`}
+                    style={{ width: `${Math.max(width, 8)}%` }}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
 }
-// ── 对比模式：3列并排 ──
-function drawComparison(p: any, W: number, H: number, entries: ComparisonEntry[]) {
-  const n = entries.length;
-  const colW = W / n;
-  const bestAvg = Math.min(...entries.map(e => e.result.statistics.avgWaitTime));
 
-  // 底部条形图高度区域
-  const barAreaH = 110;
-  const mainH = H - barAreaH;
+function TabButton({
+  active,
+  disabled,
+  children,
+  onClick,
+}: {
+  active: boolean;
+  disabled: boolean;
+  children: React.ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+        active ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+      } disabled:cursor-not-allowed disabled:opacity-40`}
+    >
+      {children}
+    </button>
+  );
+}
 
-  // 每列
-  entries.forEach((entry, ei) => {
-    const x = ei * colW;
-    const stats = entry.result.statistics;
-    const wins = entry.result.windows;
-    const isBest = stats.avgWaitTime <= bestAvg + 0.001;
+function EmptyState({ message }: { message: string }) {
+  return (
+    <div className="flex h-full min-h-[360px] items-center justify-center rounded-[24px] border border-dashed border-slate-200 bg-slate-50 px-6 text-center text-sm text-slate-500">
+      {message}
+    </div>
+  );
+}
 
-    // 列背景
-    p.noStroke();
-    p.fill(ei % 2 === 0 ? 28 : 24, ei % 2 === 0 ? 28 : 24, ei % 2 === 0 ? 26 : 22, 200);
-    p.rect(x, 0, colW, mainH);
+function StatCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-[18px] bg-white/5 px-4 py-3">
+      <div className="text-xs text-slate-400">{label}</div>
+      <div className="mt-1 text-lg font-semibold text-white">{value}</div>
+    </div>
+  );
+}
 
-    // 算法名
-    p.textAlign(p.CENTER, p.TOP);
-    p.textSize(13);
-    p.fill(isBest ? C.orange[0] : C.gray[0], isBest ? C.orange[1] : C.gray[1], isBest ? C.orange[2] : C.gray[2]);
-    const shortName = entry.algorithmName.replace(/（.*）/, '').replace(/\(.*\)/, '');
-    p.text(shortName, x + colW / 2, 14);
-    if (isBest) {
-      p.textSize(9);
-      p.fill(C.green[0], C.green[1], C.green[2]);
-      p.text('★ 最优', x + colW / 2, 32);
-    }
+function MetricChip({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-[18px] bg-slate-50 px-3 py-3">
+      <div className="text-xs text-slate-500">{label}</div>
+      <div className="mt-1 text-sm font-semibold text-slate-900">{value}</div>
+    </div>
+  );
+}
 
-    // 平均等待时间大字
-    p.textSize(28);
-    p.fill(isBest ? C.orange[0] : C.blue[0], isBest ? C.orange[1] : C.blue[1], isBest ? C.orange[2] : C.blue[2]);
-    p.textAlign(p.CENTER, p.CENTER);
-    p.text(`${stats.avgWaitTime.toFixed(1)}`, x + colW / 2, 80);
-    p.textSize(10);
-    p.fill(C.gray[0], C.gray[1], C.gray[2], 160);
-    p.text('分钟/人均等待', x + colW / 2, 105);
+function LegendRow({ color, label }: { color: string; label: string }) {
+  return (
+    <div className="flex items-center gap-3">
+      <span className="h-3 w-3 rounded-full" style={{ backgroundColor: color }} />
+      <span>{label}</span>
+    </div>
+  );
+}
 
-    // 总客户数
-    p.textSize(11);
-    p.fill(C.gray[0], C.gray[1], C.gray[2]);
-    p.text(`${stats.totalCustomers} 人`, x + colW / 2, 130);
-    p.textSize(9);
-    p.fill(C.gray[0], C.gray[1], C.gray[2], 140);
-    p.text('总服务客户', x + colW / 2, 145);
+function sampleJobs(jobs: Job[], limit: number) {
+  if (jobs.length <= limit) {
+    return jobs;
+  }
 
-    // 窗口利用率柱状图
-    const barTop = 168;
-    const barH = mainH - barTop - 16;
-    const bw = Math.min(22, (colW - 20) / Math.max(wins.length, 1) - 4);
-    const spacing = (colW - 16) / Math.max(wins.length, 1);
-    wins.forEach((w, wi) => {
-      const util = Math.min(1, w.totalServiceTime / Math.max(1, stats.totalSimulationTime));
-      const bx = x + 8 + wi * spacing + spacing / 2 - bw / 2;
-      const bh = Math.max(4, util * barH);
-      p.noStroke();
-      p.fill(C.green[0], C.green[1], C.green[2], 180);
-      p.rect(bx, barTop + barH - bh, bw, bh, 2);
-      p.fill(C.gray[0], C.gray[1], C.gray[2], 120);
-      p.textSize(8);
-      p.textAlign(p.CENTER, p.BOTTOM);
-      p.text(`W${w.id}`, bx + bw/2, barTop + barH + 12);
-    });
-    p.textAlign(p.LEFT, p.TOP);
-    p.textSize(9);
-    p.fill(C.gray[0], C.gray[1], C.gray[2], 100);
-    p.text('窗口利用率', x + 8, barTop - 12);
+  const step = Math.ceil(jobs.length / limit);
+  return jobs.filter((_, index) => index % step === 0).slice(0, limit);
+}
 
-    // 列分割线
-    if (ei < n - 1) {
-      p.stroke(C.gray[0], C.gray[1], C.gray[2], 30);
-      p.strokeWeight(1);
-      p.line(x + colW, 0, x + colW, mainH);
-      p.noStroke();
-    }
+function getServerPositions(serverCount: number) {
+  const centerX = 560;
+  const centerY = 210;
+  const radius = 150;
+
+  return Array.from({ length: serverCount }, (_, index) => {
+    const angle =
+      serverCount === 1
+        ? -Math.PI / 2
+        : -Math.PI * 0.78 + (Math.PI * 1.56 * index) / (serverCount - 1);
+
+    return {
+      x: centerX + Math.cos(angle) * radius,
+      y: centerY + Math.sin(angle) * radius,
+    };
   });
-
-  // ── 底部横向对比条形图 ──
-  const barY = mainH;
-  p.fill(16, 16, 15);
-  p.noStroke();
-  p.rect(0, barY, W, barAreaH);
-
-  p.textAlign(p.LEFT, p.CENTER);
-  p.textSize(10);
-  p.fill(C.gray[0], C.gray[1], C.gray[2], 160);
-  p.text('平均等待时间对比（分钟）', 14, barY + 14);
-
-  const maxAvg = Math.max(...entries.map(e => e.result.statistics.avgWaitTime), 0.1);
-  const rowH = (barAreaH - 28) / n;
-  entries.forEach((entry, ei) => {
-    const stats = entry.result.statistics;
-    const isBest = stats.avgWaitTime <= bestAvg + 0.001;
-    const bw = Math.max(4, (stats.avgWaitTime / maxAvg) * (W - 140));
-    const by = barY + 26 + ei * rowH + rowH / 2 - 9;
-    p.noStroke();
-    p.fill(isBest ? C.orange[0] : C.blue[0], isBest ? C.orange[1] : C.blue[1], isBest ? C.orange[2] : C.blue[2], isBest ? 220 : 140);
-    p.rect(100, by, bw, 14, 2);
-    p.fill(C.gray[0], C.gray[1], C.gray[2]);
-    p.textAlign(p.RIGHT, p.CENTER);
-    p.textSize(9);
-    const shortN = entry.algorithmName.replace(/（.*）/, '').replace(/\(.*\)/, '');
-    p.text(shortN, 96, by + 7);
-    p.textAlign(p.LEFT, p.CENTER);
-    p.fill(isBest ? C.orange[0] : C.gray[0], isBest ? C.orange[1] : C.gray[1], isBest ? C.orange[2] : C.gray[2]);
-    p.text(`${stats.avgWaitTime.toFixed(2)}m`, 104 + bw, by + 7);
-  });
 }
 
-function drawRadar(p: any, cx: number, cy: number, stats: any, windows: any[]) {
-  const R = 60;
-  const axes = ['总客户', '平均等待', '平均逗留', '最大队列', '利用率'];
-  const values = [
-    Math.min(1, stats.totalCustomers / 100),
-    Math.min(1, stats.avgWaitTime / 20),
-    Math.min(1, (stats.avgWaitTime + 5) / 30),
-    Math.min(1, (stats.totalCustomers / 10) / 10),
-    windows.reduce((sum: number, w: any) => sum + (w.totalServiceTime / Math.max(1, stats.totalSimulationTime)), 0) / windows.length
-  ];
+function waitColor(waitTime: number, avgWait: number) {
+  const normalized = Math.min(1, waitTime / Math.max(avgWait * 1.4, 1));
 
-  p.stroke(C.gray[0], C.gray[1], C.gray[2], 50);
-  p.noFill();
-  for (let j = 1; j <= 4; j++) {
-    p.beginShape();
-    for (let i = 0; i < 5; i++) {
-      const angle = (i / 5) * Math.PI * 2 - Math.PI / 2;
-      p.vertex(cx + Math.cos(angle) * R * (j / 4), cy + Math.sin(angle) * R * (j / 4));
-    }
-    p.endShape(p.CLOSE);
+  if (normalized < 0.5) {
+    return '#38bdf8';
   }
 
-  p.stroke(C.orange[0], C.orange[1], C.orange[2], 150);
-  p.strokeWeight(2);
-  p.fill(C.orange[0], C.orange[1], C.orange[2], 50);
-  p.beginShape();
-  for (let i = 0; i < 5; i++) {
-    const angle = (i / 5) * Math.PI * 2 - Math.PI / 2;
-    p.vertex(cx + Math.cos(angle) * R * values[i], cy + Math.sin(angle) * R * values[i]);
+  if (normalized < 0.8) {
+    return '#f59e0b';
   }
-  p.endShape(p.CLOSE);
 
-  p.noStroke();
-  p.fill(C.gray[0], C.gray[1], C.gray[2], 200);
-  p.textSize(8);
-  p.textAlign(p.CENTER, p.CENTER);
-  for (let i = 0; i < 5; i++) {
-    const angle = (i / 5) * Math.PI * 2 - Math.PI / 2;
-    const tx = cx + Math.cos(angle) * (R + 15);
-    const ty = cy + Math.sin(angle) * (R + 15);
-    p.text(axes[i], tx, ty);
-  }
+  return '#fb7185';
 }
 
+function displayAlgorithmName(result: BenchmarkRunResult) {
+  if (isAlgorithmId(result.algorithmId)) {
+    return getAlgorithmMeta(result.algorithmId).shortName;
+  }
 
+  return result.algorithmName;
+}
 
+function queueStructureLabel(structure: BenchmarkRunResult['queueStructure']) {
+  switch (structure) {
+    case 'shared':
+      return '共享队列';
+    case 'holding':
+      return '待派池';
+    default:
+      return '独立队列';
+  }
+}

@@ -1,19 +1,17 @@
-/**
- * QueueLab Benchmark Metrics
- * 6个核心指标的精确计算实现
- */
+import type {
+  BenchmarkMetrics,
+  BenchmarkState,
+  Job,
+  Server,
+} from './benchmark-types';
 
-import type { Job, Server, BenchmarkMetrics } from './benchmark-types';
-
-/**
- * 计算所有benchmark指标
- */
 export function calculateMetrics(
   jobs: Job[],
   servers: Server[],
-  totalSimulationTime: number
+  totalSimulationTime: number,
+  snapshots: BenchmarkState[] = [],
 ): BenchmarkMetrics {
-  const completedJobs = jobs.filter(j => j.status === 'completed');
+  const completedJobs = jobs.filter((job) => job.status === 'completed');
 
   if (completedJobs.length === 0) {
     return {
@@ -22,147 +20,133 @@ export function calculateMetrics(
       avgStay: 0,
       serviceLevel5m: 0,
       jainFairnessWait: 1,
-      utilizationStd: 0
+      utilizationStd: 0,
+      maxQueueLength: 0,
+      maxWait: 0,
+      starvedCount: 0,
     };
   }
 
-  const waitTimes = completedJobs.map(j => j.startTime - j.arrivalTime);
-  const stayTimes = completedJobs.map(j => j.endTime - j.arrivalTime);
+  const waitTimes = completedJobs.map((job) => job.startTime - job.arrivalTime);
+  const stayTimes = completedJobs.map((job) => job.endTime - job.arrivalTime);
 
   return {
-    avgWait: calculateAvgWait(waitTimes),
-    p95Wait: calculateP95Wait(waitTimes),
-    avgStay: calculateAvgStay(stayTimes),
-    serviceLevel5m: calculateServiceLevel5m(waitTimes),
+    avgWait: average(waitTimes),
+    p95Wait: percentile(waitTimes, 0.95),
+    avgStay: average(stayTimes),
+    serviceLevel5m: waitTimes.filter((wait) => wait <= 5).length / waitTimes.length,
     jainFairnessWait: calculateJainFairness(waitTimes),
-    utilizationStd: calculateUtilizationStd(servers, totalSimulationTime)
+    utilizationStd: calculateUtilizationStd(servers, totalSimulationTime),
+    maxQueueLength: calculateMaxQueueLength(snapshots),
+    maxWait: Math.max(...waitTimes),
+    starvedCount: waitTimes.filter((wait) => wait > 10).length,
   };
 }
 
-/**
- * 1. 平均等待时间
- * avgWait = mean(startTime - arrivalTime)
- */
-function calculateAvgWait(waitTimes: number[]): number {
-  if (waitTimes.length === 0) return 0;
-  const sum = waitTimes.reduce((acc, t) => acc + t, 0);
-  return sum / waitTimes.length;
+function average(values: number[]): number {
+  if (values.length === 0) {
+    return 0;
+  }
+
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
-/**
- * 2. 95分位等待时间
- * p95Wait = 95th percentile of waitTime
- */
-function calculateP95Wait(waitTimes: number[]): number {
-  if (waitTimes.length === 0) return 0;
+function percentile(values: number[], ratio: number): number {
+  if (values.length === 0) {
+    return 0;
+  }
 
-  const sorted = [...waitTimes].sort((a, b) => a - b);
-  const index = Math.ceil(sorted.length * 0.95) - 1;
-  return sorted[Math.max(0, index)];
+  const sorted = [...values].sort((left, right) => left - right);
+  const index = Math.max(0, Math.ceil(sorted.length * ratio) - 1);
+  return sorted[index];
 }
 
-/**
- * 3. 平均逗留时间
- * avgStay = mean(endTime - arrivalTime)
- */
-function calculateAvgStay(stayTimes: number[]): number {
-  if (stayTimes.length === 0) return 0;
-  const sum = stayTimes.reduce((acc, t) => acc + t, 0);
-  return sum / stayTimes.length;
+function calculateJainFairness(values: number[]): number {
+  if (values.length === 0) {
+    return 1;
+  }
+
+  const sum = values.reduce((total, value) => total + value, 0);
+  const sumSquares = values.reduce((total, value) => total + value * value, 0);
+
+  if (sumSquares === 0) {
+    return 1;
+  }
+
+  return (sum * sum) / (values.length * sumSquares);
 }
 
-/**
- * 4. 服务水平（5分钟内开始服务的比例）
- * serviceLevel5m = count(waitTime <= 5) / N
- */
-function calculateServiceLevel5m(waitTimes: number[]): number {
-  if (waitTimes.length === 0) return 0;
-  const within5min = waitTimes.filter(t => t <= 5).length;
-  return within5min / waitTimes.length;
-}
+function calculateUtilizationStd(
+  servers: Server[],
+  totalSimulationTime: number,
+): number {
+  if (servers.length === 0 || totalSimulationTime <= 0) {
+    return 0;
+  }
 
-/**
- * 5. Jain公平性指数
- *
- * 公式：
- * - 如果所有等待时间相等，返回 1
- * - 否则：fairness = (sum(wait_i))^2 / (n * sum(wait_i^2))
- *
- * 值域：[0, 1]，越接近1越公平
- *
- * 参考：Jain's Fairness Index (arXiv:cs/9809099)
- */
-function calculateJainFairness(waitTimes: number[]): number {
-  if (waitTimes.length === 0) return 1;
-
-  // 检查是否所有等待时间相等
-  const allEqual = waitTimes.every(t => t === waitTimes[0]);
-  if (allEqual) return 1;
-
-  const n = waitTimes.length;
-  const sum = waitTimes.reduce((acc, t) => acc + t, 0);
-  const sumSquares = waitTimes.reduce((acc, t) => acc + t * t, 0);
-
-  if (sumSquares === 0) return 1;
-
-  return (sum * sum) / (n * sumSquares);
-}
-
-/**
- * 6. 窗口负载不均衡度（利用率标准差）
- *
- * 公式：
- * - util_i = serverBusyTime_i / totalSimulationTime
- * - utilizationStd = std(util_1, util_2, ..., util_k)
- *
- * 值越小表示负载越均衡
- */
-function calculateUtilizationStd(servers: Server[], totalSimulationTime: number): number {
-  if (servers.length === 0 || totalSimulationTime === 0) return 0;
-
-  const utilizations = servers.map(s => s.busyTime / totalSimulationTime);
-
-  const mean = utilizations.reduce((acc, u) => acc + u, 0) / utilizations.length;
-  const variance = utilizations.reduce((acc, u) => acc + (u - mean) ** 2, 0) / utilizations.length;
+  const utilizations = servers.map((server) => server.busyTime / totalSimulationTime);
+  const mean = average(utilizations);
+  const variance =
+    utilizations.reduce((total, utilization) => total + (utilization - mean) ** 2, 0) /
+    utilizations.length;
 
   return Math.sqrt(variance);
 }
 
-/**
- * 格式化指标用于显示
- */
+function calculateMaxQueueLength(snapshots: BenchmarkState[]): number {
+  if (snapshots.length === 0) {
+    return 0;
+  }
+
+  return snapshots.reduce((maxQueue, snapshot) => {
+    const dedicatedMax = snapshot.servers.reduce(
+      (serverMax, server) => Math.max(serverMax, server.queueJobIds.length),
+      0,
+    );
+
+    return Math.max(
+      maxQueue,
+      dedicatedMax,
+      snapshot.sharedQueue.length,
+      snapshot.holdingPool.length,
+    );
+  }, 0);
+}
+
 export function formatMetrics(metrics: BenchmarkMetrics): Record<string, string> {
   return {
-    avgWait: `${metrics.avgWait.toFixed(2)} 分钟`,
-    p95Wait: `${metrics.p95Wait.toFixed(2)} 分钟`,
-    avgStay: `${metrics.avgStay.toFixed(2)} 分钟`,
+    avgWait: `${metrics.avgWait.toFixed(2)} min`,
+    p95Wait: `${metrics.p95Wait.toFixed(2)} min`,
+    avgStay: `${metrics.avgStay.toFixed(2)} min`,
     serviceLevel5m: `${(metrics.serviceLevel5m * 100).toFixed(1)}%`,
     jainFairnessWait: metrics.jainFairnessWait.toFixed(3),
-    utilizationStd: metrics.utilizationStd.toFixed(3)
+    utilizationStd: metrics.utilizationStd.toFixed(3),
+    maxQueueLength: `${metrics.maxQueueLength}`,
+    maxWait: `${metrics.maxWait.toFixed(2)} min`,
+    starvedCount: `${metrics.starvedCount}`,
   };
 }
 
-/**
- * 指标排序方向
- * true = 越大越好，false = 越小越好
- */
 export const metricDirections: Record<keyof BenchmarkMetrics, boolean> = {
-  avgWait: false,        // 越小越好
-  p95Wait: false,        // 越小越好
-  avgStay: false,        // 越小越好
-  serviceLevel5m: true,  // 越大越好
-  jainFairnessWait: true,  // 越大越好
-  utilizationStd: false  // 越小越好
+  avgWait: false,
+  p95Wait: false,
+  avgStay: false,
+  serviceLevel5m: true,
+  jainFairnessWait: true,
+  utilizationStd: false,
+  maxQueueLength: false,
+  maxWait: false,
+  starvedCount: false,
 };
 
-/**
- * 指标中文名称
- */
 export const metricNames: Record<keyof BenchmarkMetrics, string> = {
   avgWait: '平均等待时间',
-  p95Wait: '95分位等待时间',
+  p95Wait: 'P95 等待时间',
   avgStay: '平均逗留时间',
-  serviceLevel5m: '服务水平(≤5分钟)',
-  jainFairnessWait: '等待公平性(Jain指数)',
-  utilizationStd: '负载不均衡度'
+  serviceLevel5m: '5 分钟内开始服务比例',
+  jainFairnessWait: '等待公平性（Jain）',
+  utilizationStd: '窗口负载离散度',
+  maxQueueLength: '峰值排队长度',
+  maxWait: '最大等待时间',
+  starvedCount: '等待超过 10 分钟人数',
 };

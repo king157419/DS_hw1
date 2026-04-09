@@ -1,9 +1,3 @@
-/**
- * Decision Audit Panel
- * 显示算法决策过程的右侧面板
- */
-
-import React from 'react';
 import type { DecisionReason } from '@/lib/benchmark-types';
 
 interface DecisionAuditPanelProps {
@@ -11,60 +5,74 @@ interface DecisionAuditPanelProps {
   currentTime: number;
 }
 
-export default function DecisionAuditPanel({ decisions, currentTime }: DecisionAuditPanelProps) {
-  // 只显示最近的10条决策
+export default function DecisionAuditPanel({
+  decisions,
+  currentTime,
+}: DecisionAuditPanelProps) {
   const recentDecisions = decisions
-    .filter(d => d.time <= currentTime)
-    .slice(-10)
+    .filter((decision) => decision.time <= currentTime)
+    .slice(-8)
     .reverse();
 
   return (
-    <div className="bg-white rounded-lg border border-gray-200 p-4 h-full overflow-y-auto">
-      <h3 className="text-sm font-bold text-gray-800 mb-3">决策审计</h3>
+    <div className="rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-sm">
+      <div className="mb-3 text-sm font-semibold text-slate-900">决策审计</div>
 
       {recentDecisions.length === 0 ? (
-        <div className="text-xs text-gray-400 text-center py-8">
-          暂无决策记录
+        <div className="rounded-2xl bg-slate-50 px-4 py-8 text-center text-sm text-slate-400">
+          当前时间点还没有可展示的调度决策
         </div>
       ) : (
-        <div className="space-y-2">
+        <div className="space-y-3">
           {recentDecisions.map((decision, index) => (
-            <div
-              key={`${decision.time}-${decision.jobId}-${index}`}
-              className="bg-gray-50 rounded p-2 text-xs border border-gray-200"
+            <article
+              key={`${decision.time}-${decision.jobId}-${decision.action}-${index}`}
+              className="rounded-2xl border border-slate-200 bg-slate-50 p-3"
             >
-              <div className="flex items-center justify-between mb-1">
-                <span className="font-mono text-gray-500">
-                  t={decision.time.toFixed(1)}
+              <div className="flex items-center justify-between gap-3">
+                <div className="font-mono text-xs text-slate-500">
+                  t = {decision.time.toFixed(1)}
+                </div>
+                <span
+                  className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${
+                    decision.action === 'arrival'
+                      ? 'bg-blue-100 text-blue-700'
+                      : 'bg-emerald-100 text-emerald-700'
+                  }`}
+                >
+                  {decision.action === 'arrival' ? '到达决策' : '派发决策'}
                 </span>
-                <span className={`px-1.5 py-0.5 rounded text-xs font-bold ${
-                  decision.action === 'arrival' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'
-                }`}>
-                  {decision.action === 'arrival' ? '到达' : '调度'}
-                </span>
               </div>
 
-              <div className="text-gray-700 mb-1">
-                <span className="font-bold">客户 #{decision.jobId}</span>
-                {decision.serverId && (
-                  <span> → 窗口 {decision.serverId}</span>
-                )}
+              <div className="mt-2 text-sm text-slate-800">
+                客户 <span className="font-semibold">#{decision.jobId}</span>
+                {decision.serverId !== null ? (
+                  <span className="text-slate-500"> → 窗口 {decision.serverId}</span>
+                ) : null}
               </div>
 
-              <div className="text-gray-600 text-xs">
-                {decision.reason}
-              </div>
+              <p className="mt-2 text-sm leading-6 text-slate-600">{decision.reason}</p>
 
-              {decision.candidateScores && (
-                <div className="mt-1 pt-1 border-t border-gray-200">
-                  <div className="text-xs text-gray-500">
-                    候选评分: {Object.entries(decision.candidateScores)
-                      .map(([id, score]) => `窗口${id}=${score.toFixed(1)}`)
-                      .join(', ')}
+              {decision.candidateScores ? (
+                <div className="mt-3 border-t border-slate-200 pt-3">
+                  <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">
+                    Candidate Scores
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {Object.entries(decision.candidateScores)
+                      .sort((left, right) => Number(left[0]) - Number(right[0]))
+                      .map(([serverId, score]) => (
+                        <span
+                          key={serverId}
+                          className="rounded-full bg-white px-3 py-1 text-xs font-medium text-slate-600 shadow-sm"
+                        >
+                          窗口 {serverId}: {score.toFixed(1)}
+                        </span>
+                      ))}
                   </div>
                 </div>
-              )}
-            </div>
+              ) : null}
+            </article>
           ))}
         </div>
       )}

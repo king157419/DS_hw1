@@ -1,19 +1,33 @@
-/**
- * QueueLab Benchmark Presets
- * 7个deterministic预设场景，用于算法对比实验
- */
-
 import type { BenchmarkPreset } from './benchmark-types';
 
-export const benchmarkPresets: Record<string, BenchmarkPreset> = {
-  /**
-   * 1. 均衡负载基准
-   * 客户均匀到达，服务时间适中
-   */
-  balanced_baseline: {
-    name: '均衡负载基准',
-    description: '客户均匀到达，服务时间适中，用于验证基本功能',
+export const presetIds = [
+  'balanced_baseline',
+  'burst_peak',
+  'long_short_mixed',
+  'convoy_effect',
+  'overload_equal_jobs',
+  'late_short_jobs',
+  'fairness_stress',
+  'shared_queue_advantage',
+  'short_jobs_after_longs',
+] as const;
+
+export type PresetId = typeof presetIds[number];
+
+export const defaultPresetId: PresetId = 'convoy_effect';
+
+function definePreset(id: PresetId, preset: Omit<BenchmarkPreset, 'id'>): BenchmarkPreset {
+  return { id, ...preset };
+}
+
+export const benchmarkPresets: Record<PresetId, BenchmarkPreset> = {
+  balanced_baseline: definePreset('balanced_baseline', {
+    name: 'Balanced Baseline',
+    description: 'Even arrivals and moderate service times for sanity checks and regression runs.',
     serverCount: 4,
+    differentiation: 'weak',
+    difficulty: 'low',
+    recommendedFor: 'sanity-check',
     jobs: [
       { arrivalTime: 0, serviceTime: 5 },
       { arrivalTime: 2, serviceTime: 6 },
@@ -26,18 +40,16 @@ export const benchmarkPresets: Record<string, BenchmarkPreset> = {
       { arrivalTime: 16, serviceTime: 5 },
       { arrivalTime: 18, serviceTime: 7 },
       { arrivalTime: 20, serviceTime: 5 },
-      { arrivalTime: 22, serviceTime: 6 }
-    ]
-  },
-
-  /**
-   * 2. 突发高峰
-   * 短时间内大量客户同时到达
-   */
-  burst_peak: {
-    name: '突发高峰',
-    description: '16个客户在0-2分钟内集中到达，测试算法应对突发流量的能力',
+      { arrivalTime: 22, serviceTime: 6 },
+    ],
+  }),
+  burst_peak: definePreset('burst_peak', {
+    name: 'Burst Peak',
+    description: 'A short burst of arrivals used to test congestion handling under a sudden peak.',
     serverCount: 4,
+    differentiation: 'weak',
+    difficulty: 'medium',
+    recommendedFor: 'sanity-check',
     jobs: [
       { arrivalTime: 0, serviceTime: 5 },
       { arrivalTime: 0, serviceTime: 6 },
@@ -54,18 +66,16 @@ export const benchmarkPresets: Record<string, BenchmarkPreset> = {
       { arrivalTime: 2, serviceTime: 6 },
       { arrivalTime: 2, serviceTime: 4 },
       { arrivalTime: 2, serviceTime: 5 },
-      { arrivalTime: 2, serviceTime: 6 }
-    ]
-  },
-
-  /**
-   * 3. 长短业务混合
-   * 长业务和短业务交错到达，测试SPT优势
-   */
-  long_short_mixed: {
-    name: '长短业务混合',
-    description: '长业务（12分钟）和短业务（1-2分钟）混合，测试SPT对平均逗留时间的优化',
+      { arrivalTime: 2, serviceTime: 6 },
+    ],
+  }),
+  long_short_mixed: definePreset('long_short_mixed', {
+    name: 'Long and Short Mix',
+    description: 'Long jobs mixed with short jobs to amplify the benefit of shortest-job dispatching.',
     serverCount: 4,
+    differentiation: 'strong',
+    difficulty: 'medium',
+    recommendedFor: 'demo',
     jobs: [
       { arrivalTime: 0, serviceTime: 12 },
       { arrivalTime: 0, serviceTime: 1 },
@@ -82,18 +92,16 @@ export const benchmarkPresets: Record<string, BenchmarkPreset> = {
       { arrivalTime: 3, serviceTime: 1 },
       { arrivalTime: 3, serviceTime: 2 },
       { arrivalTime: 3, serviceTime: 1 },
-      { arrivalTime: 3, serviceTime: 2 }
-    ]
-  },
-
-  /**
-   * 4. 车队效应
-   * 一个长业务阻塞后续短业务
-   */
-  convoy_effect: {
-    name: '车队效应',
-    description: '一个长业务（20分钟）后跟随多个短业务（1分钟），测试队列结构对车队效应的影响',
+      { arrivalTime: 3, serviceTime: 2 },
+    ],
+  }),
+  convoy_effect: definePreset('convoy_effect', {
+    name: 'Convoy Effect',
+    description: 'Long jobs block the front of the line while short jobs pile up behind them.',
     serverCount: 4,
+    differentiation: 'strong',
+    difficulty: 'high',
+    recommendedFor: 'demo',
     jobs: [
       { arrivalTime: 0, serviceTime: 20 },
       { arrivalTime: 0, serviceTime: 1 },
@@ -110,32 +118,28 @@ export const benchmarkPresets: Record<string, BenchmarkPreset> = {
       { arrivalTime: 3, serviceTime: 20 },
       { arrivalTime: 3, serviceTime: 1 },
       { arrivalTime: 3, serviceTime: 1 },
-      { arrivalTime: 3, serviceTime: 1 }
-    ]
-  },
-
-  /**
-   * 5. 过载等长任务
-   * 大量相同服务时间的任务，测试负载均衡
-   */
-  overload_equal_jobs: {
-    name: '过载等长任务',
-    description: '20个服务时间相同（5分钟）的任务同时到达，测试负载均衡能力',
+      { arrivalTime: 3, serviceTime: 1 },
+    ],
+  }),
+  overload_equal_jobs: definePreset('overload_equal_jobs', {
+    name: 'Equal-Length Overload',
+    description: 'Many same-length jobs arrive together to test whether load balancing stays stable.',
     serverCount: 4,
-    jobs: Array.from({ length: 20 }, (_, i) => ({
+    differentiation: 'weak',
+    difficulty: 'low',
+    recommendedFor: 'sanity-check',
+    jobs: Array.from({ length: 20 }, () => ({
       arrivalTime: 0,
-      serviceTime: 5
-    }))
-  },
-
-  /**
-   * 6. 后到短任务
-   * 前期长任务，后期短任务，测试SPT和公平性权衡
-   */
-  late_short_jobs: {
-    name: '后到短任务',
-    description: '前8个长任务（10分钟），后8个短任务（1分钟），测试SPT效率和公平性权衡',
+      serviceTime: 5,
+    })),
+  }),
+  late_short_jobs: definePreset('late_short_jobs', {
+    name: 'Late Short Jobs',
+    description: 'Short jobs arrive after a wall of long jobs, exposing efficiency versus fairness tradeoffs.',
     serverCount: 4,
+    differentiation: 'strong',
+    difficulty: 'medium',
+    recommendedFor: 'demo',
     jobs: [
       { arrivalTime: 0, serviceTime: 10 },
       { arrivalTime: 0, serviceTime: 10 },
@@ -152,18 +156,16 @@ export const benchmarkPresets: Record<string, BenchmarkPreset> = {
       { arrivalTime: 6, serviceTime: 1 },
       { arrivalTime: 6, serviceTime: 1 },
       { arrivalTime: 6, serviceTime: 1 },
-      { arrivalTime: 6, serviceTime: 1 }
-    ]
-  },
-
-  /**
-   * 7. 公平性压力测试
-   * 极端服务时间差异，测试公平性指标
-   */
-  fairness_stress: {
-    name: '公平性压力测试',
-    description: '服务时间从1到15分钟递增，测试算法对不同客户的公平性',
+      { arrivalTime: 6, serviceTime: 1 },
+    ],
+  }),
+  fairness_stress: definePreset('fairness_stress', {
+    name: 'Fairness Stress',
+    description: 'Service times vary widely so fairness and tail wait become easy to compare.',
     serverCount: 4,
+    differentiation: 'medium',
+    difficulty: 'medium',
+    recommendedFor: 'fairness',
     jobs: [
       { arrivalTime: 0, serviceTime: 1 },
       { arrivalTime: 0, serviceTime: 3 },
@@ -180,21 +182,69 @@ export const benchmarkPresets: Record<string, BenchmarkPreset> = {
       { arrivalTime: 3, serviceTime: 10 },
       { arrivalTime: 3, serviceTime: 12 },
       { arrivalTime: 3, serviceTime: 14 },
-      { arrivalTime: 3, serviceTime: 1 }
-    ]
-  }
+      { arrivalTime: 3, serviceTime: 1 },
+    ],
+  }),
+  shared_queue_advantage: definePreset('shared_queue_advantage', {
+    name: 'Shared Queue Advantage',
+    description: 'Early arrivals fragment local queues while later windows sit idle, favoring a shared queue.',
+    serverCount: 4,
+    differentiation: 'strong',
+    difficulty: 'medium',
+    recommendedFor: 'demo',
+    jobs: [
+      { arrivalTime: 0, serviceTime: 8 },
+      { arrivalTime: 0, serviceTime: 8 },
+      { arrivalTime: 0.1, serviceTime: 8 },
+      { arrivalTime: 0.1, serviceTime: 8 },
+      { arrivalTime: 0.2, serviceTime: 8 },
+      { arrivalTime: 0.2, serviceTime: 8 },
+      { arrivalTime: 0.3, serviceTime: 8 },
+      { arrivalTime: 0.3, serviceTime: 8 },
+      { arrivalTime: 2, serviceTime: 3 },
+      { arrivalTime: 3, serviceTime: 3 },
+      { arrivalTime: 4, serviceTime: 3 },
+      { arrivalTime: 5, serviceTime: 3 },
+      { arrivalTime: 6, serviceTime: 3 },
+      { arrivalTime: 7, serviceTime: 3 },
+    ],
+  }),
+  short_jobs_after_longs: definePreset('short_jobs_after_longs', {
+    name: 'Short Jobs After Long Jobs',
+    description: 'A wall of long jobs fills every window before a large wave of short jobs arrives.',
+    serverCount: 4,
+    differentiation: 'strong',
+    difficulty: 'high',
+    recommendedFor: 'demo',
+    jobs: [
+      { arrivalTime: 0, serviceTime: 20 },
+      { arrivalTime: 0, serviceTime: 20 },
+      { arrivalTime: 0, serviceTime: 20 },
+      { arrivalTime: 0, serviceTime: 20 },
+      { arrivalTime: 1, serviceTime: 1 },
+      { arrivalTime: 1, serviceTime: 1 },
+      { arrivalTime: 1, serviceTime: 1 },
+      { arrivalTime: 1, serviceTime: 1 },
+      { arrivalTime: 2, serviceTime: 1 },
+      { arrivalTime: 2, serviceTime: 1 },
+      { arrivalTime: 2, serviceTime: 1 },
+      { arrivalTime: 2, serviceTime: 1 },
+      { arrivalTime: 3, serviceTime: 2 },
+      { arrivalTime: 3, serviceTime: 2 },
+      { arrivalTime: 3, serviceTime: 2 },
+      { arrivalTime: 3, serviceTime: 2 },
+    ],
+  }),
 };
 
-/**
- * 获取所有预设名称列表
- */
-export function getPresetNames(): string[] {
-  return Object.keys(benchmarkPresets);
+export function isPresetId(value: string): value is PresetId {
+  return value in benchmarkPresets;
 }
 
-/**
- * 获取预设
- */
-export function getPreset(name: string): BenchmarkPreset | undefined {
-  return benchmarkPresets[name];
+export function getPreset(id: string): BenchmarkPreset | undefined {
+  return isPresetId(id) ? benchmarkPresets[id] : undefined;
+}
+
+export function getAllPresets(): BenchmarkPreset[] {
+  return presetIds.map((id) => benchmarkPresets[id]);
 }

@@ -1,93 +1,129 @@
-/**
- * Mini Trend Panel
- * 显示实时趋势的小图表
- */
-
-import React from 'react';
 import type { BenchmarkState } from '@/lib/benchmark-types';
 
 interface MiniTrendPanelProps {
   snapshots: BenchmarkState[];
+  currentTime: number;
 }
 
-export default function MiniTrendPanel({ snapshots }: MiniTrendPanelProps) {
+interface SeriesPoint {
+  time: number;
+  value: number;
+}
+
+export default function MiniTrendPanel({
+  snapshots,
+  currentTime,
+}: MiniTrendPanelProps) {
   if (snapshots.length === 0) {
     return (
-      <div className="bg-white rounded-lg border border-gray-200 p-4">
-        <div className="text-xs text-gray-400 text-center">暂无趋势数据</div>
+      <div className="rounded-2xl border border-slate-200 bg-white/95 p-4 text-sm text-slate-400">
+        暂无趋势数据
       </div>
     );
   }
 
-  const waitingCounts = snapshots.map(s => s.jobs.filter(j => j.status === 'waiting').length);
-  const inSystemCounts = snapshots.map(s =>
-    s.jobs.filter(j => j.status === 'waiting' || j.status === 'serving').length
-  );
-  const longestQueues = snapshots.map(s =>
-    Math.max(...s.servers.map(srv => srv.queueJobIds.length), 0)
-  );
+  const waitingSeries = snapshots.map((snapshot) => ({
+    time: snapshot.currentTime,
+    value: snapshot.jobs.filter((job) => job.status === 'waiting').length,
+  }));
 
-  const maxWaiting = Math.max(...waitingCounts, 1);
-  const maxInSystem = Math.max(...inSystemCounts, 1);
-  const maxQueue = Math.max(...longestQueues, 1);
+  const inSystemSeries = snapshots.map((snapshot) => ({
+    time: snapshot.currentTime,
+    value: snapshot.jobs.filter((job) => job.status !== 'completed').length,
+  }));
+
+  const queueSeries = snapshots.map((snapshot) => ({
+    time: snapshot.currentTime,
+    value: Math.max(
+      snapshot.sharedQueue.length,
+      snapshot.holdingPool.length,
+      ...snapshot.servers.map((server) => server.queueJobIds.length),
+    ),
+  }));
 
   return (
-    <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-4">
-      <h3 className="text-sm font-bold text-gray-800">实时趋势</h3>
-
-      <MiniChart
-        title="等待人数"
-        data={waitingCounts}
-        max={maxWaiting}
-        color="rgb(234, 179, 8)"
-      />
-
-      <MiniChart
-        title="系统内人数"
-        data={inSystemCounts}
-        max={maxInSystem}
-        color="rgb(249, 115, 22)"
-      />
-
-      <MiniChart
-        title="最长队列"
-        data={longestQueues}
-        max={maxQueue}
-        color="rgb(239, 68, 68)"
-      />
+    <div className="rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-sm">
+      <div className="mb-3 text-sm font-semibold text-slate-900">实时趋势</div>
+      <div className="space-y-4">
+        <MiniChart
+          title="等待人数"
+          color="#f59e0b"
+          series={waitingSeries}
+          currentTime={currentTime}
+        />
+        <MiniChart
+          title="系统内人数"
+          color="#fb923c"
+          series={inSystemSeries}
+          currentTime={currentTime}
+        />
+        <MiniChart
+          title="队列峰值"
+          color="#ef4444"
+          series={queueSeries}
+          currentTime={currentTime}
+        />
+      </div>
     </div>
   );
 }
 
-function MiniChart({ title, data, max, color }: { title: string; data: number[]; max: number; color: string }) {
-  const points = data.slice(-20); // 只显示最近20个点
-  const width = 200;
-  const height = 40;
+function MiniChart({
+  title,
+  color,
+  series,
+  currentTime,
+}: {
+  title: string;
+  color: string;
+  series: SeriesPoint[];
+  currentTime: number;
+}) {
+  const width = 260;
+  const height = 56;
+  const maxValue = Math.max(1, ...series.map((point) => point.value));
+  const activeIndex = findActiveIndex(series, currentTime);
 
-  const pathData = points
-    .map((value, index) => {
-      const x = (index / (points.length - 1)) * width;
-      const y = height - (value / max) * height;
-      return `${index === 0 ? 'M' : 'L'} ${x} ${y}`;
+  const path = series
+    .map((point, index) => {
+      const denominator = series.length === 1 ? 1 : series.length - 1;
+      const x = series.length === 1 ? width / 2 : (index / denominator) * width;
+      const y = height - (point.value / maxValue) * height;
+      return `${index === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${y.toFixed(2)}`;
     })
     .join(' ');
 
+  const activePoint = series[activeIndex] ?? series[series.length - 1];
+  const activeX =
+    series.length === 1
+      ? width / 2
+      : (activeIndex / Math.max(series.length - 1, 1)) * width;
+  const activeY = height - (activePoint.value / maxValue) * height;
+
   return (
     <div>
-      <div className="flex items-center justify-between mb-1">
-        <span className="text-xs text-gray-600">{title}</span>
-        <span className="text-xs font-bold text-gray-700">{points[points.length - 1] || 0}</span>
+      <div className="mb-1 flex items-center justify-between">
+        <span className="text-xs text-slate-500">{title}</span>
+        <span className="text-xs font-semibold text-slate-800">{activePoint.value}</span>
       </div>
-      <svg width={width} height={height} className="w-full">
-        <path
-          d={pathData}
-          fill="none"
-          stroke={color}
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
+      <svg viewBox={`0 0 ${width} ${height}`} className="h-14 w-full overflow-visible">
+        <path d={path} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" />
+        <circle cx={activeX} cy={activeY} r="4" fill={color} />
       </svg>
     </div>
   );
+}
+
+function findActiveIndex(series: SeriesPoint[], currentTime: number): number {
+  let activeIndex = 0;
+
+  for (let index = 0; index < series.length; index += 1) {
+    if (series[index].time <= currentTime) {
+      activeIndex = index;
+    } else {
+      break;
+    }
+  }
+
+  return activeIndex;
 }
