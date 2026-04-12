@@ -72,15 +72,15 @@ export default function Home() {
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
-  const [speed, setSpeed] = useState(1);
+  const [speed, setSpeed] = useState(0.5);
 
   useEffect(() => {
     void loadPresets();
   }, []);
 
-  const selectedPreset = presets.find((preset) => preset.id === selectedPresetId);
-  const singlePreset = presets.find((preset) => preset.id === singlePresetId);
-  const comparisonPreset = presets.find((preset) => preset.id === comparisonPresetId);
+  const selectedPreset = presets.find((preset) => preset.id === selectedPresetId) ?? null;
+  const singlePreset = presets.find((preset) => preset.id === singlePresetId) ?? null;
+  const comparisonPreset = presets.find((preset) => preset.id === comparisonPresetId) ?? null;
   const currentSnapshot = getSnapshotAtTime(singleResult?.snapshots ?? [], currentTime);
 
   async function loadPresets() {
@@ -131,7 +131,7 @@ export default function Home() {
       setScreen('results');
     } catch (runError) {
       console.error(runError);
-      setError(runError instanceof Error ? runError.message : '运行单算法动画失败。');
+      setError(runError instanceof Error ? runError.message : '单算法动画运行失败。');
     } finally {
       setLoading(null);
     }
@@ -169,7 +169,7 @@ export default function Home() {
       setScreen('results');
     } catch (runError) {
       console.error(runError);
-      setError(runError instanceof Error ? runError.message : '运行多算法对比失败。');
+      setError(runError instanceof Error ? runError.message : '多算法对比运行失败。');
     } finally {
       setLoading(null);
     }
@@ -186,21 +186,24 @@ export default function Home() {
   function resetPlayback() {
     setIsPlaying(false);
     setCurrentTime(0);
-    setSpeed(1);
+    setSpeed(0.5);
   }
 
+  const groupedPresets = groupPresets(presets);
+
   return (
-    <main className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(59,130,246,0.12),_transparent_32%),linear-gradient(180deg,#eff6ff_0%,#eef2ff_45%,#f8fafc_100%)] px-6 py-8">
+    <main className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(14,165,233,0.12),_transparent_30%),linear-gradient(180deg,#eff6ff_0%,#eef2ff_42%,#f8fafc_100%)] px-6 py-8">
       <div className="mx-auto max-w-7xl">
         <header className="mb-8 text-center">
           <div className="inline-flex rounded-full bg-white/90 px-4 py-1 text-sm font-medium text-slate-600 shadow-sm">
-            QueueLab · 银行队列调度实验平台
+            QueueLab · 银行队列算法展示台
           </div>
           <h1 className="mt-4 text-4xl font-semibold tracking-tight text-slate-900">
-            Benchmark 视图补完版
+            Benchmark Demo Harness
           </h1>
           <p className="mx-auto mt-3 max-w-3xl text-base leading-7 text-slate-600">
-            单算法动画和多算法分析已经拆成两条独立链路，解释性、趋势与 preset 标签也统一到 id contract。
+            这版只做演示闭环：默认给强差异场景，单算法动画和多算法对比分开运行，
+            播放层专注展示“入口 → 排队 → 服务 → 离开”的过程。
           </p>
         </header>
 
@@ -217,7 +220,8 @@ export default function Home() {
                 <div className="max-w-2xl">
                   <h2 className="text-xl font-semibold text-slate-900">1. 选择实验场景</h2>
                   <p className="mt-2 text-sm leading-6 text-slate-500">
-                    所有 selector 和 API 都只用 presetId / algorithmId，不再依赖显示名匹配。
+                    预设已经按“推荐演示 / 正确性校验 / 公平性观察”分层，默认使用
+                    `convoy_effect`。
                   </p>
                 </div>
 
@@ -227,23 +231,38 @@ export default function Home() {
                     onChange={(event) => setSelectedPresetId(event.target.value as PresetId)}
                     className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-slate-800 outline-none transition focus:border-sky-400 focus:bg-white"
                   >
-                    {presets.map((preset) => (
-                      <option key={preset.id} value={preset.id}>
-                        {preset.name}
-                      </option>
-                    ))}
+                    <optgroup label="推荐演示">
+                      {groupedPresets.demo.map((preset) => (
+                        <option key={preset.id} value={preset.id}>
+                          {preset.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="正确性校验">
+                      {groupedPresets['sanity-check'].map((preset) => (
+                        <option key={preset.id} value={preset.id}>
+                          {preset.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="公平性观察">
+                      {groupedPresets.fairness.map((preset) => (
+                        <option key={preset.id} value={preset.id}>
+                          {preset.name}
+                        </option>
+                      ))}
+                    </optgroup>
                   </select>
                 </div>
               </div>
 
               {selectedPreset ? (
-                <div className="mt-6 grid gap-5 lg:grid-cols-[minmax(0,1fr)_280px]">
+                <div className="mt-6 grid gap-5 xl:grid-cols-[minmax(0,1fr)_300px]">
                   <div className="rounded-[24px] bg-slate-50 p-5">
-                    <div className="text-lg font-semibold text-slate-900">{selectedPreset.name}</div>
-                    <p className="mt-3 text-sm leading-7 text-slate-600">
-                      {selectedPreset.description}
-                    </p>
-                    <div className="mt-4 flex flex-wrap gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="text-lg font-semibold text-slate-900">
+                        {selectedPreset.name}
+                      </div>
                       {getPresetTags(selectedPreset).map((tag) => (
                         <span
                           key={tag.label}
@@ -253,15 +272,28 @@ export default function Home() {
                         </span>
                       ))}
                     </div>
+                    <p className="mt-3 text-sm leading-7 text-slate-600">
+                      {selectedPreset.description}
+                    </p>
+
+                    {selectedPreset.differentiation === 'weak' ? (
+                      <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                        当前场景负载较低或分布较均匀，算法指标可能接近。
+                        它适合做正确性检查，不适合作为主展示。
+                      </div>
+                    ) : null}
                   </div>
 
                   <div className="rounded-[24px] border border-slate-200 bg-white p-5">
-                    <div className="text-sm font-semibold text-slate-900">场景规模</div>
+                    <div className="text-sm font-semibold text-slate-900">场景摘要</div>
                     <div className="mt-4 grid grid-cols-2 gap-3">
                       <PresetStat label="窗口数" value={`${selectedPreset.serverCount}`} />
                       <PresetStat label="客户数" value={`${selectedPreset.jobCount}`} />
                       <PresetStat label="难度" value={difficultyLabel(selectedPreset.difficulty)} />
-                      <PresetStat label="差异度" value={differentiationLabel(selectedPreset.differentiation)} />
+                      <PresetStat
+                        label="差异强度"
+                        value={differentiationLabel(selectedPreset.differentiation)}
+                      />
                     </div>
                   </div>
                 </div>
@@ -272,7 +304,8 @@ export default function Home() {
               <section className="rounded-[28px] border border-slate-200 bg-white/95 p-6 shadow-sm">
                 <h2 className="text-xl font-semibold text-slate-900">2. 单算法动画</h2>
                 <p className="mt-2 text-sm leading-6 text-slate-500">
-                  这里只会调用 <code className="rounded bg-slate-100 px-1 py-0.5">benchmarkSingle</code>。
+                  这里只调用 <code className="rounded bg-slate-100 px-1 py-0.5">benchmarkSingle</code>，
+                  不再偷用 compare 的第一个结果来画动画。
                 </p>
 
                 <div className="mt-5 space-y-3">
@@ -314,7 +347,8 @@ export default function Home() {
               <section className="rounded-[28px] border border-slate-200 bg-white/95 p-6 shadow-sm">
                 <h2 className="text-xl font-semibold text-slate-900">3. 多算法对比</h2>
                 <p className="mt-2 text-sm leading-6 text-slate-500">
-                  这里只会调用 <code className="rounded bg-slate-100 px-1 py-0.5">benchmarkCompare</code>，不会再默认拿第一个结果画动画。
+                  这里只调用 <code className="rounded bg-slate-100 px-1 py-0.5">benchmarkCompare</code>，
+                  单算法动画和多算法分析完全拆开。
                 </p>
 
                 <div className="mt-5 space-y-3">
@@ -368,7 +402,7 @@ export default function Home() {
               <div className="flex flex-wrap gap-2">
                 {singlePreset ? (
                   <span className="rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-white">
-                    单算法场景：{singlePreset.name}
+                    动画场景：{singlePreset.name}
                   </span>
                 ) : null}
                 {comparisonPreset ? (
@@ -384,14 +418,16 @@ export default function Home() {
                 <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
                   <div>
                     <h2 className="text-2xl font-semibold text-slate-900">主动画区</h2>
-                    <p className="mt-1 text-sm text-slate-500">页面层只保留这一处 P5 动画挂载。</p>
+                    <p className="mt-1 text-sm text-slate-500">
+                      页面层只保留这一处播放区，右侧只显示状态、趋势和决策摘要。
+                    </p>
                   </div>
                   <div className="rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700">
                     {singleResult.algorithmName}
                   </div>
                 </div>
 
-                <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
+                <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1.25fr)_320px]">
                   <div className="min-w-0">
                     <P5QueueVisualization
                       result={singleResult}
@@ -401,7 +437,6 @@ export default function Home() {
                       onPlayingChange={setIsPlaying}
                       onSpeedChange={setSpeed}
                       onTimeChange={setCurrentTime}
-                      showHud
                     />
                   </div>
 
@@ -425,7 +460,7 @@ export default function Home() {
               </section>
             ) : (
               <section className="rounded-[28px] border border-dashed border-slate-300 bg-white/80 px-6 py-10 text-center text-sm text-slate-500">
-                当前还没有单算法动画结果。运行一次单算法动画后，这里才会挂载主动画区。
+                还没有单算法动画结果。先运行一次单算法动画，这里才会出现主播放区。
               </section>
             )}
 
@@ -434,7 +469,8 @@ export default function Home() {
                 <div className="mb-5">
                   <h2 className="text-2xl font-semibold text-slate-900">多算法分析</h2>
                   <p className="mt-1 text-sm text-slate-500">
-                    这部分只消费 <code className="rounded bg-slate-100 px-1 py-0.5">benchmarkCompare</code> 的结果。
+                    这一块只消费 <code className="rounded bg-slate-100 px-1 py-0.5">benchmarkCompare</code>{' '}
+                    的结果。
                   </p>
                 </div>
                 <MetricsComparisonPanel results={comparisonResults} />
@@ -476,6 +512,14 @@ function getSnapshotAtTime(
   return activeSnapshot;
 }
 
+function groupPresets(presets: PresetOption[]) {
+  return {
+    demo: presets.filter((preset) => preset.recommendedFor === 'demo'),
+    'sanity-check': presets.filter((preset) => preset.recommendedFor === 'sanity-check'),
+    fairness: presets.filter((preset) => preset.recommendedFor === 'fairness'),
+  };
+}
+
 function getPresetTags(preset: PresetOption) {
   return [
     {
@@ -515,7 +559,7 @@ function recommendedForLabel(value: RecommendedFor) {
     case 'fairness':
       return '公平性观察';
     default:
-      return '基础校验';
+      return '正确性校验';
   }
 }
 
@@ -526,7 +570,7 @@ function differentiationTag(value: Differentiation) {
     case 'medium':
       return '差异适中';
     default:
-      return '差异较小';
+      return '差异较弱';
   }
 }
 
@@ -544,10 +588,10 @@ function difficultyLabel(value: Difficulty) {
 function differentiationLabel(value: Differentiation) {
   switch (value) {
     case 'strong':
-      return '明显';
+      return '强';
     case 'medium':
-      return '中等';
+      return '中';
     default:
-      return '较弱';
+      return '弱';
   }
 }

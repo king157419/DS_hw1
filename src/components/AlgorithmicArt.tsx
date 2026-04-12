@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import type { BenchmarkRunResult, Job } from '@/lib/benchmark-types';
 import { getAlgorithmMeta, isAlgorithmId } from '@/lib/benchmark-registry';
 
@@ -35,7 +35,7 @@ export default function AlgorithmicArt({
         <div>
           <h3 className="text-lg font-semibold text-slate-900">Algorithmic Art</h3>
           <p className="mt-1 text-sm text-slate-500">
-            用显式 tab 在单算法流向图和多算法分析视图之间切换。
+            用显式 tab 在单算法 flow 视图和多算法 compare 视图之间切换。
           </p>
         </div>
 
@@ -85,18 +85,18 @@ function FlowView({ result }: { result: BenchmarkRunResult | null }) {
         </div>
 
         <div className="grid grid-cols-2 gap-3">
-          <StatCard label="平均等待" value={`${result.metrics.avgWait.toFixed(2)}m`} />
-          <StatCard label="P95 等待" value={`${result.metrics.p95Wait.toFixed(2)}m`} />
-          <StatCard label="峰值队列" value={`${result.metrics.maxQueueLength}`} />
-          <StatCard label="总时长" value={`${totalTime.toFixed(1)}m`} />
+          <StatCard label="Average Wait" value={`${result.metrics.avgWait.toFixed(2)}m`} />
+          <StatCard label="P95 Wait" value={`${result.metrics.p95Wait.toFixed(2)}m`} />
+          <StatCard label="Max Queue" value={`${result.metrics.maxQueueLength}`} />
+          <StatCard label="Total Time" value={`${totalTime.toFixed(1)}m`} />
         </div>
 
         <div className="rounded-[20px] border border-white/10 bg-white/5 p-4">
           <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Legend</div>
           <div className="mt-3 space-y-2 text-sm text-slate-300">
-            <LegendRow color="#38bdf8" label="等待较短" />
-            <LegendRow color="#f59e0b" label="等待中等" />
-            <LegendRow color="#fb7185" label="等待较长" />
+            <LegendRow color="#38bdf8" label="Shorter waits" />
+            <LegendRow color="#f59e0b" label="Medium waits" />
+            <LegendRow color="#fb7185" label="Long waits" />
           </div>
         </div>
       </aside>
@@ -106,7 +106,7 @@ function FlowView({ result }: { result: BenchmarkRunResult | null }) {
           <circle cx="240" cy="210" r="24" fill="#f8fafc" fillOpacity="0.95" />
           <circle cx="240" cy="210" r="12" fill="#f97316" />
           <text x="240" y="252" textAnchor="middle" fontSize="12" fill="#cbd5e1">
-            客户流入
+            Customer inflow
           </text>
 
           {sampledJobs.map((job) => {
@@ -141,10 +141,10 @@ function FlowView({ result }: { result: BenchmarkRunResult | null }) {
                 />
                 <circle cx={target.x} cy={target.y} r="14" fill="#0f172a" fillOpacity="0.75" />
                 <text x={target.x} y={target.y - 52} textAnchor="middle" fontSize="13" fill="#e2e8f0">
-                  窗口 {server.id}
+                  Window {server.id}
                 </text>
                 <text x={target.x} y={target.y + 58} textAnchor="middle" fontSize="12" fill="#cbd5e1">
-                  利用率 {(utilization * 100).toFixed(0)}%
+                  Utilization {(utilization * 100).toFixed(0)}%
                 </text>
               </g>
             );
@@ -201,7 +201,7 @@ function CompareView({ results }: { results: BenchmarkRunResult[] }) {
                 </div>
                 {isBest ? (
                   <span className="rounded-full bg-orange-100 px-3 py-1 text-xs font-semibold text-orange-700">
-                    差异最优
+                    Best separation
                   </span>
                 ) : null}
               </div>
@@ -210,13 +210,13 @@ function CompareView({ results }: { results: BenchmarkRunResult[] }) {
                 {result.metrics.avgWait.toFixed(2)}
                 <span className="ml-1 text-base text-slate-400">min</span>
               </div>
-              <div className="mt-1 text-sm text-slate-500">平均等待时间</div>
+              <div className="mt-1 text-sm text-slate-500">Average wait time</div>
 
               <div className="mt-5 grid grid-cols-2 gap-3">
                 <MetricChip label="P95" value={`${result.metrics.p95Wait.toFixed(2)}m`} />
-                <MetricChip label="公平性" value={result.metrics.jainFairnessWait.toFixed(3)} />
-                <MetricChip label="峰值队列" value={`${result.metrics.maxQueueLength}`} />
-                <MetricChip label="负载离散" value={result.metrics.utilizationStd.toFixed(3)} />
+                <MetricChip label="Fairness" value={result.metrics.jainFairnessWait.toFixed(3)} />
+                <MetricChip label="Max Queue" value={`${result.metrics.maxQueueLength}`} />
+                <MetricChip label="Util. Std" value={result.metrics.utilizationStd.toFixed(3)} />
               </div>
             </article>
           );
@@ -224,7 +224,7 @@ function CompareView({ results }: { results: BenchmarkRunResult[] }) {
       </div>
 
       <div className="rounded-[24px] border border-slate-200 bg-slate-950 px-5 py-5 text-slate-100">
-        <div className="mb-4 text-sm font-medium text-slate-300">平均等待时间对比</div>
+        <div className="mb-4 text-sm font-medium text-slate-300">Average wait comparison</div>
         <div className="space-y-3">
           {sorted.map((result) => {
             const width = worstWait === 0 ? 0 : (result.metrics.avgWait / worstWait) * 100;
@@ -259,7 +259,7 @@ function TabButton({
 }: {
   active: boolean;
   disabled: boolean;
-  children: React.ReactNode;
+  children: ReactNode;
   onClick: () => void;
 }) {
   return (
@@ -363,10 +363,10 @@ function displayAlgorithmName(result: BenchmarkRunResult) {
 function queueStructureLabel(structure: BenchmarkRunResult['queueStructure']) {
   switch (structure) {
     case 'shared':
-      return '共享队列';
+      return 'Shared Queue';
     case 'holding':
-      return '待派池';
+      return 'Holding Pool';
     default:
-      return '独立队列';
+      return 'Dedicated Queues';
   }
 }

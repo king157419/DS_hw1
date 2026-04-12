@@ -1,4 +1,3 @@
-import React from 'react';
 import type { BenchmarkState } from '@/lib/benchmark-types';
 
 interface BenchmarkStatusBarProps {
@@ -17,7 +16,7 @@ export default function BenchmarkStatusBar({
   if (!state) {
     return (
       <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500">
-        等待动画状态数据...
+        Waiting for playback state...
       </div>
     );
   }
@@ -31,29 +30,29 @@ export default function BenchmarkStatusBar({
   return (
     <div className="rounded-lg border border-indigo-200 bg-gradient-to-r from-indigo-50 to-sky-50 px-4 py-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-4 text-sm">
-          <Badge label="算法" value={algorithmName} />
-          <Badge label="时间" value={`${state.currentTime.toFixed(1)} min`} />
-          <Badge label="系统内" value={String(inSystemCount)} />
-          <Badge label="等待" value={String(waitingCount)} />
-          <Badge label="服务中" value={String(servingCount)} />
-          <Badge label="已完成" value={String(completedCount)} />
-          <Badge label="最长队列" value={String(longestQueue)} />
-          {state.queueStructure === 'shared' && (
-            <Badge label="共享队列" value={String(state.sharedQueue.length)} />
-          )}
-          {state.queueStructure === 'holding' && (
-            <Badge label="待派池" value={String(state.holdingPool.length)} />
-          )}
+        <div className="flex flex-wrap items-center gap-3 text-sm">
+          <Badge label="Algorithm" value={algorithmName} />
+          <Badge label="Time" value={`${state.currentTime.toFixed(1)} min`} />
+          <Badge label="In System" value={String(inSystemCount)} />
+          <Badge label="Waiting" value={String(waitingCount)} />
+          <Badge label="Serving" value={String(servingCount)} />
+          <Badge label="Completed" value={String(completedCount)} />
+          <Badge label="Longest Queue" value={String(longestQueue)} />
+          {state.queueStructure === 'shared' ? (
+            <Badge label="Shared Queue" value={String(state.sharedQueue.length)} />
+          ) : null}
+          {state.queueStructure === 'holding' ? (
+            <Badge label="Holding Pool" value={String(state.holdingPool.length)} />
+          ) : null}
         </div>
 
         <div className="flex items-center gap-2 text-sm text-slate-600">
           <span
             className={`h-2.5 w-2.5 rounded-full ${
-              isPlaying ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'
+              isPlaying ? 'animate-pulse bg-emerald-500' : 'bg-slate-400'
             }`}
           />
-          <span>{isPlaying ? `播放中 (${speed}x)` : '已暂停'}</span>
+          <span>{isPlaying ? `Playing (${speed.toFixed(1)}x)` : 'Paused'}</span>
         </div>
       </div>
     </div>

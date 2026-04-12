@@ -4,7 +4,9 @@ import type {
   BenchmarkState,
   DecisionReason,
   Job,
+  PlaybackEvent,
   PlaybackFrame,
+  PlaybackQueueId,
   QueueStructureKind,
   Server,
   TimelineEvent,
@@ -25,6 +27,7 @@ export class BenchmarkEngine {
   private readonly decisions: DecisionReason[] = [];
   private readonly snapshots: BenchmarkState[] = [];
   private readonly playbackFrames: PlaybackFrame[] = [];
+  private readonly playbackEvents: PlaybackEvent[] = [];
 
   private readonly policy: BenchmarkConfig['policy'];
   private readonly queueStructure: QueueStructureKind;
@@ -97,7 +100,7 @@ export class BenchmarkEngine {
       this.recordSnapshot();
       this.recordPlaybackFrame(
         playbackEventType,
-        lastTimelineEvent?.description ?? `${event.type} @ ${this.currentTime}`,
+        lastTimelineEvent?.description ?? `${event.type} @ ${this.currentTime.toFixed(1)}`,
       );
     }
 
@@ -120,6 +123,7 @@ export class BenchmarkEngine {
       jobs: this.cloneJobs(),
       servers: this.cloneServers(),
       playbackFrames: [...this.playbackFrames],
+      playbackEvents: this.playbackEvents.map((event) => ({ ...event })),
     };
   }
 
@@ -129,15 +133,14 @@ export class BenchmarkEngine {
       return;
     }
 
-    const decision = this.policy.onArrival(job, this.captureState());
-    this.decisions.push({
-      time: this.currentTime,
-      jobId: job.id,
-      serverId: decision.serverId,
-      action: 'arrival',
-      reason: decision.reason,
-      candidateScores: decision.candidateScores,
+    this.recordPlaybackEvent({
+      type: 'arrival',
+      at: this.currentTime,
+      customerId: job.id,
     });
+
+    const decision = this.policy.onArrival(job, this.captureState());
+    this.recordDecision(job.id, decision.serverId, 'arrival', decision.reason, decision.candidateScores);
 
     if (this.queueStructure === 'dedicated') {
       this.handleDedicatedArrival(job, decision.serverId);
@@ -147,11 +150,18 @@ export class BenchmarkEngine {
     if (this.queueStructure === 'shared') {
       job.queueEnterTime = this.currentTime;
       this.sharedQueue.push(job.id);
+      this.recordPlaybackEvent({
+        type: 'join_queue',
+        at: this.currentTime,
+        customerId: job.id,
+        queueId: 'shared-main',
+        position: this.sharedQueue.length - 1,
+      });
       this.timeline.push({
         time: this.currentTime,
         type: 'arrival',
         jobId: job.id,
-        description: `客户 ${job.id} 进入共享队列`,
+        description: `Customer ${job.id} joined the shared queue.`,
       });
 
       const idleServer = this.servers.find((server) => server.currentJobId === null);
@@ -163,11 +173,18 @@ export class BenchmarkEngine {
 
     job.holdingEnterTime = this.currentTime;
     this.holdingPool.push(job.id);
+    this.recordPlaybackEvent({
+      type: 'join_queue',
+      at: this.currentTime,
+      customerId: job.id,
+      queueId: 'holding-main',
+      position: this.holdingPool.length - 1,
+    });
     this.timeline.push({
       time: this.currentTime,
       type: 'arrival',
       jobId: job.id,
-      description: `客户 ${job.id} 进入待派池`,
+      description: `Customer ${job.id} entered the holding pool.`,
     });
 
     const idleServer = this.servers.find((server) => server.currentJobId === null);
@@ -192,7 +209,7 @@ export class BenchmarkEngine {
         type: 'arrival',
         jobId: job.id,
         serverId: server.id,
-        description: `客户 ${job.id} 到达，窗口 ${server.id} 空闲，立即服务`,
+        description: `Customer ${job.id} arrived and immediately started at window ${server.id}.`,
       });
       this.startService(job, server);
       return;
@@ -200,12 +217,20 @@ export class BenchmarkEngine {
 
     job.queueEnterTime = this.currentTime;
     server.queueJobIds.push(job.id);
+    this.recordPlaybackEvent({
+      type: 'join_queue',
+      at: this.currentTime,
+      customerId: job.id,
+      queueId: this.serverQueueId(server.id),
+      position: server.queueJobIds.length - 1,
+      serverId: server.id,
+    });
     this.timeline.push({
       time: this.currentTime,
       type: 'arrival',
       jobId: job.id,
       serverId: server.id,
-      description: `客户 ${job.id} 到达后进入窗口 ${server.id} 的队列`,
+      description: `Customer ${job.id} joined window ${server.id}'s queue.`,
     });
   }
 
@@ -225,12 +250,25 @@ export class BenchmarkEngine {
     server.currentJobId = null;
     server.busyUntil = this.currentTime;
 
+    this.recordPlaybackEvent({
+      type: 'end_service',
+      at: this.currentTime,
+      customerId: job.id,
+      serverId: server.id,
+    });
+    this.recordPlaybackEvent({
+      type: 'leave_system',
+      at: this.currentTime,
+      customerId: job.id,
+      serverId: server.id,
+    });
+
     this.timeline.push({
       time: this.currentTime,
       type: 'end_service',
       jobId: job.id,
       serverId: server.id,
-      description: `客户 ${job.id} 在窗口 ${server.id} 完成服务`,
+      description: `Customer ${job.id} finished service at window ${server.id}.`,
     });
 
     if (this.queueStructure === 'dedicated') {
@@ -279,15 +317,7 @@ export class BenchmarkEngine {
       return;
     }
 
-    this.decisions.push({
-      time: this.currentTime,
-      jobId: job.id,
-      serverId: server.id,
-      action: 'dispatch',
-      reason: decision.reason,
-      candidateScores: decision.candidateScores,
-    });
-
+    this.recordDecision(job.id, server.id, 'dispatch', decision.reason, decision.candidateScores);
     this.startService(job, server);
   }
 
@@ -312,15 +342,7 @@ export class BenchmarkEngine {
       return;
     }
 
-    this.decisions.push({
-      time: this.currentTime,
-      jobId: job.id,
-      serverId: server.id,
-      action: 'dispatch',
-      reason: decision.reason,
-      candidateScores: decision.candidateScores,
-    });
-
+    this.recordDecision(job.id, server.id, 'dispatch', decision.reason, decision.candidateScores);
     this.startService(job, server);
   }
 
@@ -334,18 +356,53 @@ export class BenchmarkEngine {
     server.busyUntil = job.endTime;
     server.busyTime += job.serviceTime;
 
+    this.recordPlaybackEvent({
+      type: 'start_service',
+      at: this.currentTime,
+      customerId: job.id,
+      serverId: server.id,
+    });
+
     this.timeline.push({
       time: this.currentTime,
       type: 'start_service',
       jobId: job.id,
       serverId: server.id,
-      description: `客户 ${job.id} 在窗口 ${server.id} 开始服务`,
+      description: `Customer ${job.id} started service at window ${server.id}.`,
     });
 
     this.enqueueEvent({
       time: job.endTime,
       type: 'departure',
       serverId: server.id,
+    });
+  }
+
+  private recordDecision(
+    jobId: number,
+    serverId: number | null,
+    action: DecisionReason['action'],
+    reason: string,
+    candidateScores?: DecisionReason['candidateScores'],
+  ): void {
+    const decision: DecisionReason = {
+      time: this.currentTime,
+      jobId,
+      serverId,
+      action,
+      reason,
+      candidateScores,
+    };
+
+    this.decisions.push(decision);
+    this.recordPlaybackEvent({
+      type: 'decision',
+      at: this.currentTime,
+      customerId: jobId,
+      action,
+      chosenServerId: serverId,
+      reason,
+      candidateScores,
     });
   }
 
@@ -380,6 +437,10 @@ export class BenchmarkEngine {
     });
   }
 
+  private recordPlaybackEvent(event: PlaybackEvent): void {
+    this.playbackEvents.push(event);
+  }
+
   private captureState(): BenchmarkState {
     return {
       currentTime: this.currentTime,
@@ -408,5 +469,9 @@ export class BenchmarkEngine {
 
   private getServer(serverId: number): Server | undefined {
     return this.servers.find((server) => server.id === serverId);
+  }
+
+  private serverQueueId(serverId: number): PlaybackQueueId {
+    return `server-${serverId}`;
   }
 }

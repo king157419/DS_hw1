@@ -17,7 +17,7 @@ export default function MiniTrendPanel({
   if (snapshots.length === 0) {
     return (
       <div className="rounded-2xl border border-slate-200 bg-white/95 p-4 text-sm text-slate-400">
-        暂无趋势数据
+        No trend data yet.
       </div>
     );
   }
@@ -43,22 +43,22 @@ export default function MiniTrendPanel({
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-sm">
-      <div className="mb-3 text-sm font-semibold text-slate-900">实时趋势</div>
+      <div className="mb-3 text-sm font-semibold text-slate-900">Real-time Trends</div>
       <div className="space-y-4">
         <MiniChart
-          title="等待人数"
+          title="Waiting Customers"
           color="#f59e0b"
           series={waitingSeries}
           currentTime={currentTime}
         />
         <MiniChart
-          title="系统内人数"
+          title="Customers In System"
           color="#fb923c"
           series={inSystemSeries}
           currentTime={currentTime}
         />
         <MiniChart
-          title="队列峰值"
+          title="Queue Peak"
           color="#ef4444"
           series={queueSeries}
           currentTime={currentTime}
@@ -95,9 +95,7 @@ function MiniChart({
 
   const activePoint = series[activeIndex] ?? series[series.length - 1];
   const activeX =
-    series.length === 1
-      ? width / 2
-      : (activeIndex / Math.max(series.length - 1, 1)) * width;
+    series.length === 1 ? width / 2 : (activeIndex / Math.max(series.length - 1, 1)) * width;
   const activeY = height - (activePoint.value / maxValue) * height;
 
   return (

@@ -72,6 +72,50 @@ export interface PlaybackFrame {
   description: string;
 }
 
+export type PlaybackQueueId = 'shared-main' | 'holding-main' | `server-${number}`;
+
+export type PlaybackEvent =
+  | {
+      type: 'arrival';
+      at: number;
+      customerId: number;
+    }
+  | {
+      type: 'join_queue';
+      at: number;
+      customerId: number;
+      queueId: PlaybackQueueId;
+      position: number;
+      serverId?: number;
+    }
+  | {
+      type: 'start_service';
+      at: number;
+      customerId: number;
+      serverId: number;
+    }
+  | {
+      type: 'end_service';
+      at: number;
+      customerId: number;
+      serverId: number;
+    }
+  | {
+      type: 'leave_system';
+      at: number;
+      customerId: number;
+      serverId: number;
+    }
+  | {
+      type: 'decision';
+      at: number;
+      customerId: number;
+      action: 'arrival' | 'dispatch';
+      chosenServerId: number | null;
+      reason: string;
+      candidateScores?: CandidateScoreMap;
+    };
+
 export interface BenchmarkRunResult {
   algorithmId: string;
   algorithmName: string;
@@ -84,6 +128,7 @@ export interface BenchmarkRunResult {
   jobs: Job[];
   servers: Server[];
   playbackFrames: PlaybackFrame[];
+  playbackEvents: PlaybackEvent[];
 }
 
 export interface ArrivalDecision {
