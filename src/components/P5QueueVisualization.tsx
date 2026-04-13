@@ -731,8 +731,8 @@ function drawPhaseOrder(phase: ActorRenderState['phase']) {
 function buildDisplayEvents(events: PlaybackEvent[]): DisplayPlaybackEvent[] {
   const arrivalCounts = new Map<string, number>();
   const arrivalOffsets = new Map<number, number>();
-  const customerLastDisplayAt = new Map<number, number>();
-  const customerLastEventType = new Map<number, PlaybackEvent['type']>();
+  const customerLastMotionDisplayAt = new Map<number, number>();
+  const customerLastMotionEventType = new Map<number, PlaybackEvent['type']>();
 
   return events
     .map((event) => {
@@ -746,19 +746,24 @@ function buildDisplayEvents(events: PlaybackEvent[]): DisplayPlaybackEvent[] {
         arrivalOffsets.set(event.customerId, arrivalOffset);
       }
 
-      const previousDisplayAt = customerLastDisplayAt.get(event.customerId);
-      const previousType = customerLastEventType.get(event.customerId);
       const baseDisplayAt = event.at + arrivalOffset + eventPhaseOffset(event.type);
-      const displayAt =
-        previousDisplayAt === undefined
-          ? baseDisplayAt
-          : Math.max(
-              baseDisplayAt,
-              previousDisplayAt + minGapBetween(previousType, event.type),
-            );
+      const previousMotionDisplayAt = customerLastMotionDisplayAt.get(event.customerId);
+      const previousMotionType = customerLastMotionEventType.get(event.customerId);
 
-      customerLastDisplayAt.set(event.customerId, displayAt);
-      customerLastEventType.set(event.customerId, event.type);
+      const displayAt =
+        event.type === 'decision'
+          ? baseDisplayAt
+          : previousMotionDisplayAt === undefined
+            ? baseDisplayAt
+            : Math.max(
+                baseDisplayAt,
+                previousMotionDisplayAt + minGapBetween(previousMotionType, event.type),
+              );
+
+      if (event.type !== 'decision') {
+        customerLastMotionDisplayAt.set(event.customerId, displayAt);
+        customerLastMotionEventType.set(event.customerId, event.type);
+      }
 
       return {
         ...event,
